@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DAEMON="$ROOT_DIR/daemon/pi_statusd.py"
+STATE_DIR="$HOME/.pi/agent"
+PID_FILE="$STATE_DIR/statusd.pid"
+LOG_FILE="$STATE_DIR/statusd.log"
+SOCKET_FILE="$STATE_DIR/statusd.sock"
+CONFIG_FILE="$STATE_DIR/statusd.json"
+
+mkdir -p "$STATE_DIR"
+
+is_running() {
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+find_pid_fallback() {
+  pgrep -f "python3 .*daemon/pi_statusd.py" | head -n1 || true
+}
+
+find_all_pids() {
+  pgrep -f "python3 .*daemon/pi_statusd.py" || true
+}
+
+start_daemon() {
+  if is_running; then
+    echo "pi-statusd already running (pid $(cat "$PID_FILE"))."
+    return 0
+  fi
+
+  local fallback_pid
+  fallback_pid="$(find_pid_fallback)"
+  if [[ -n "$fallback_pid" ]] && kill -0 "$fallback_pid" 2>/dev/null; then
+    echo "$fallback_pid" > "$PID_FILE"
+    echo "pi-statusd already running (pid $fallback_pid)."
+    return 0
+  fi
+
+  nohup python3 "$DAEMON" >> "$LOG_FILE" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$PID_FILE"
+
+  # Give daemon a moment to create socket.
+  sleep 0.2
+
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Started pi-statusd (pid $pid)."
+  else
+    echo "Failed to start pi-statusd. Check $LOG_FILE"
+    exit 1
+  fi
+}
+
+stop_daemon() {
+  local pids
+  pids="$(find_all_pids)"
+
+  if [[ -z "$pids" ]]; then
+    echo "pi-statusd is not running."
+    rm -f "$PID_FILE" "$SOCKET_FILE"
+    return 0
+  fi
+
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    kill "$pid" 2>/dev/null || true
+  done <<< "$pids"
+
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    for _ in {1..20}; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done <<< "$pids"
+
+  rm -f "$PID_FILE" "$SOCKET_FILE"
+  echo "Stopped pi-statusd."
+}
+
+daemon_status() {
+  if is_running; then
+    local pid
+    pid="$(cat "$PID_FILE")"
+    echo "pi-statusd running (pid $pid)"
+  else
+    echo "pi-statusd not running"
+    return 1
+  fi
+
+  if python3 "$DAEMON" --request ping >/dev/null 2>&1; then
+    echo "socket: healthy ($SOCKET_FILE)"
+  else
+    echo "socket: not responding"
+    return 1
+  fi
+}
+
+terminal_get() {
+  python3 - <<PY
+import json, pathlib
+p = pathlib.Path("$CONFIG_FILE")
+if not p.exists():
+    print("auto")
+else:
+    try:
+        cfg = json.loads(p.read_text())
+    except Exception:
+        cfg = {}
+    print(cfg.get("terminal", "auto"))
+PY
+}
+
+terminal_set() {
+  local val="${1:-auto}"
+  local low
+  low="$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')"
+  case "$low" in
+    auto|system|default)
+      val="auto"
+      ;;
+    ghostty)
+      val="Ghostty"
+      ;;
+    iterm2|iterm)
+      val="iTerm2"
+      ;;
+    terminal)
+      val="Terminal"
+      ;;
+    *)
+      echo "Invalid terminal: $val"
+      echo "Valid values: auto, Ghostty, iTerm2, Terminal"
+      exit 2
+      ;;
+  esac
+
+  python3 - <<PY
+import json, pathlib
+p = pathlib.Path("$CONFIG_FILE")
+p.parent.mkdir(parents=True, exist_ok=True)
+try:
+    cfg = json.loads(p.read_text()) if p.exists() else {}
+except Exception:
+    cfg = {}
+cfg["terminal"] = "$val"
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+print("terminal set to:", cfg["terminal"])
+PY
+}
+
+show_help() {
+  cat <<'EOF'
+Usage: daemon/statusdctl <command>
+
+Commands:
+  start             Start pi-statusd in background
+  stop              Stop running pi-statusd
+  restart           Restart pi-statusd
+  status            Show process + socket health
+  ping              Check daemon socket health only
+  terminal          Show configured default terminal (auto/Ghostty/iTerm2/Terminal)
+  terminal <value>  Set terminal: auto | Ghostty | iTerm2 | Terminal
+EOF
+}
+
+cmd="${1:-status}"
+case "$cmd" in
+  start)
+    start_daemon
+    ;;
+  stop)
+    stop_daemon
+    ;;
+  restart)
+    stop_daemon
+    start_daemon
+    ;;
+  status)
+    daemon_status
+    ;;
+  ping)
+    python3 "$DAEMON" --request ping
+    ;;
+  terminal)
+    if [[ $# -ge 2 ]]; then
+      terminal_set "$2"
+    else
+      terminal_get
+    fi
+    ;;
+  *)
+    show_help
+    exit 2
+    ;;
+esac
