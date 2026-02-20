@@ -6,8 +6,15 @@ final class AgentMonitor: ObservableObject {
     @Published private(set) var summary: StatusSummary = .empty
     @Published private(set) var daemonOnline: Bool = false
     @Published private(set) var lastMessage: String?
+    @Published private(set) var dataSource: String = "fallback"
 
     private var timer: Timer?
+
+    var runningCount: Int { agents.filter { $0.activity == .running }.count }
+    var waitingCount: Int { agents.filter { $0.activity == .waitingInput }.count }
+    var closeToLimitCount: Int { agents.filter { $0.contextCloseToLimit == true }.count }
+    var nearLimitCount: Int { agents.filter { $0.contextNearLimit == true }.count }
+    var atLimitCount: Int { agents.filter { $0.contextPressure == "at_limit" }.count }
 
     func start() {
         if timer != nil { return }
@@ -24,6 +31,7 @@ final class AgentMonitor: ObservableObject {
             daemonOnline = false
             agents = []
             summary = .empty
+            dataSource = "offline"
             lastMessage = "pi-statusd unavailable"
             return
         }
@@ -36,6 +44,7 @@ final class AgentMonitor: ObservableObject {
             return lhs.pid < rhs.pid
         }
         summary = response.summary ?? .empty
+        dataSource = response.source ?? "fallback"
         lastMessage = nil
     }
 

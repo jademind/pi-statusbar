@@ -26,6 +26,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct ContentView: View {
     @ObservedObject var monitor: AgentMonitor
 
+    private func sourceText(_ source: String) -> String {
+        switch source {
+        case "pi-telemetry": return "source: telemetry"
+        case "process-fallback": return "source: fallback"
+        case "offline": return "source: offline"
+        default: return "source: fallback"
+        }
+    }
+
+    private func sourceColor(_ source: String) -> Color {
+        switch source {
+        case "pi-telemetry": return .green
+        case "offline": return .red
+        default: return .orange
+        }
+    }
+
+    private func pill(_ text: String, color: Color = .secondary) -> some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(Color.gray.opacity(0.12))
+            )
+    }
+
     private func agentPrimaryLine(_ agent: AgentState) -> String {
         if let mux = agent.mux, let session = agent.muxSession {
             return "\(mux): \(session) · \(agent.activity.label)"
@@ -41,6 +70,9 @@ struct ContentView: View {
         guard let percent = agent.contextPercent else { return nil }
         let rounded = Int(percent.rounded())
 
+        if agent.contextPressure == "at_limit" {
+            return "Context \(rounded)% · at limit"
+        }
         if agent.contextNearLimit == true {
             return "Context \(rounded)% · near limit"
         }
@@ -48,6 +80,12 @@ struct ContentView: View {
             return "Context \(rounded)% · close to limit"
         }
         return "Context \(rounded)%"
+    }
+
+    private func contextStatusColor(_ agent: AgentState) -> Color {
+        if agent.contextPressure == "at_limit" { return .red }
+        if agent.contextNearLimit == true || agent.contextCloseToLimit == true { return .orange }
+        return .secondary
     }
 
     var body: some View {
@@ -62,6 +100,30 @@ struct ContentView: View {
                 Text(monitor.daemonOnline ? "daemon: online" : "daemon: offline")
                     .font(.caption2)
                     .foregroundStyle(monitor.daemonOnline ? .green : .red)
+            }
+
+            HStack(spacing: 6) {
+                pill(sourceText(monitor.dataSource), color: sourceColor(monitor.dataSource))
+                pill("active: \(monitor.agents.count)")
+                pill("running: \(monitor.runningCount)")
+                pill("waiting: \(monitor.waitingCount)")
+                if monitor.atLimitCount > 0 {
+                    pill("at limit: \(monitor.atLimitCount)", color: .red)
+                } else if monitor.nearLimitCount > 0 {
+                    pill("near limit: \(monitor.nearLimitCount)", color: .orange)
+                } else if monitor.closeToLimitCount > 0 {
+                    pill("close limit: \(monitor.closeToLimitCount)", color: .orange)
+                }
+            }
+
+            if monitor.atLimitCount > 0 {
+                Text("🚨 Attention: \(monitor.atLimitCount) agent(s) are at context limit.")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            } else if monitor.nearLimitCount > 0 {
+                Text("⚠️ Attention: \(monitor.nearLimitCount) agent(s) are near context limit.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
             }
 
             if monitor.agents.isEmpty {
@@ -97,7 +159,7 @@ struct ContentView: View {
                                 if let context = contextStatusText(agent) {
                                     Text(context)
                                         .font(.caption2)
-                                        .foregroundStyle((agent.contextNearLimit == true || agent.contextCloseToLimit == true) ? .orange : .secondary)
+                                        .foregroundStyle(contextStatusColor(agent))
                                         .lineLimit(1)
                                 }
                             }

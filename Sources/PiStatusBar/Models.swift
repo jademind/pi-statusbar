@@ -85,6 +85,7 @@ struct StatusResponse: Decodable {
     let timestamp: Int?
     let agents: [AgentState]?
     let summary: StatusSummary?
+    let source: String?
     let error: String?
 }
 
