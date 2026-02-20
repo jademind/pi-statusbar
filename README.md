@@ -9,6 +9,16 @@ This repository contains:
 
 > `pi-statusbar` consumes telemetry from the separate [`pi-telemetry`](https://github.com/jademind/pi-telemetry) package.
 
+## Screenshots
+
+### Overview
+
+![Pi Status Bar overview](./images/pi-statusbar-overview.png)
+
+### Context state indicators
+
+![Pi Status Bar context states](./images/pi-statusbar-context-states.png)
+
 ---
 
 ## What it does
@@ -52,8 +62,8 @@ This repository contains:
 - Renders status chips:
   - source (`telemetry | fallback | offline`)
   - active/running/waiting counts
-  - context pressure (close/near/at limit)
-- Shows attention banners for near/at limit context pressure
+  - context pressure (`close limit` / `at limit`)
+- Shows attention banners for close/at limit context pressure
 
 ### Agent row layout
 
@@ -63,7 +73,7 @@ Each agent row is rendered as:
 2. Workspace line: cwd path
 3. Attachment line: `PID <pid> · window attached|no attached window · <terminal app>`
 4. Model metrics line: model name/id + token usage (`used/contextWindow`) when telemetry provides it
-5. Context line: context percent + classification (`healthy`, `close to limit`, `near limit`, `at limit`) with emoji indicator
+5. Context line: context percent + classification (`healthy`, `close to limit`, `at limit`) with emoji indicator
 
 When telemetry is unavailable, the row gracefully falls back to process-only metadata.
 

@@ -117,10 +117,7 @@ struct ContentView: View {
         if agent.contextPressure == "at_limit" {
             return ("🙁", "at limit", .red)
         }
-        if agent.contextNearLimit == true {
-            return ("😟", "near limit", .orange)
-        }
-        if agent.contextCloseToLimit == true {
+        if agent.contextNearLimit == true || agent.contextCloseToLimit == true {
             return ("☹️", "close to limit", .orange)
         }
         return ("🙂", "healthy", .secondary)
@@ -158,10 +155,8 @@ struct ContentView: View {
                 pill("waiting: \(monitor.waitingCount)")
                 if monitor.atLimitCount > 0 {
                     pill("at limit: \(monitor.atLimitCount)", color: .red)
-                } else if monitor.nearLimitCount > 0 {
-                    pill("near limit: \(monitor.nearLimitCount)", color: .orange)
-                } else if monitor.closeToLimitCount > 0 {
-                    pill("close limit: \(monitor.closeToLimitCount)", color: .orange)
+                } else if (monitor.nearLimitCount + monitor.closeToLimitCount) > 0 {
+                    pill("close limit: \(monitor.nearLimitCount + monitor.closeToLimitCount)", color: .orange)
                 }
             }
 
@@ -169,8 +164,8 @@ struct ContentView: View {
                 Text("🚨 Attention: \(monitor.atLimitCount) agent(s) are at context limit.")
                     .font(.caption2)
                     .foregroundStyle(.red)
-            } else if monitor.nearLimitCount > 0 {
-                Text("⚠️ Attention: \(monitor.nearLimitCount) agent(s) are near context limit.")
+            } else if (monitor.nearLimitCount + monitor.closeToLimitCount) > 0 {
+                Text("⚠️ Attention: \(monitor.nearLimitCount + monitor.closeToLimitCount) agent(s) are close to context limit.")
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
