@@ -9,17 +9,17 @@ This repository contains:
 
 > `pi-statusbar` consumes telemetry from the separate [`pi-telemetry`](https://github.com/jademind/pi-telemetry) package.
 
-## Screenshots
+## Version
 
-### Overview
-
-![Pi Status Bar overview](./images/pi-statusbar-overview.png)
-
-### Context state indicators
-
-![Pi Status Bar context states](./images/pi-statusbar-context-states.png)
+Current version: **0.1.0**
 
 ---
+
+## Privacy and sensitive data
+
+- This README avoids machine-specific absolute paths and credentials.
+- Runtime data is stored locally under `~/.pi/agent`.
+- Do not commit local logs, telemetry dumps, or screenshots that expose private paths/session names.
 
 ## What it does
 
@@ -62,8 +62,8 @@ This repository contains:
 - Renders status chips:
   - source (`telemetry | fallback | offline`)
   - active/running/waiting counts
-  - context pressure (`close limit` / `at limit`)
-- Shows attention banners for close/at limit context pressure
+  - context pressure (`close to limit` / `at limit`)
+- Shows attention banners for close-to-limit/at-limit context pressure
 
 ### Agent row layout
 
@@ -208,16 +208,6 @@ If status is unhealthy, inspect `~/.pi/agent/statusd.log`.
 daemon/statusdctl terminal
 daemon/statusdctl terminal Ghostty
 ```
-
----
-
-## Release checklist
-
-- [ ] `swift build`
-- [ ] `python3 -m py_compile daemon/pi_statusd.py`
-- [ ] `daemon/statusdctl restart && daemon/statusdctl ping`
-- [ ] Verify telemetry source chip (`source: telemetry`) with active Pi sessions
-- [ ] Verify Jump behavior from menu rows
 
 ---
 
