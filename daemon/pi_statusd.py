@@ -29,11 +29,21 @@ class Agent:
     mux: str | None
     mux_session: str | None
     client_pid: int | None
+    attached_window: bool | None = None
+    terminal_app: str | None = None
     telemetry_source: str | None = None
+    model_provider: str | None = None
+    model_id: str | None = None
+    model_name: str | None = None
+    session_id: str | None = None
+    session_name: str | None = None
     context_percent: float | None = None
     context_pressure: str | None = None
     context_close_to_limit: bool | None = None
     context_near_limit: bool | None = None
+    context_tokens: int | None = None
+    context_window: int | None = None
+    context_remaining_tokens: int | None = None
 
 
 class Scanner:
@@ -72,6 +82,8 @@ class Scanner:
             activity, confidence = self._infer_activity(row)
             mux, mux_session = self._infer_mux(row, by_pid)
             client_pid = self._find_mux_client_pid(mux, mux_session, row["tty"], rows)
+            terminal_app, _ = self._detect_terminal_target_for_pid(client_pid or row["pid"], by_pid)
+            attached_window = client_pid is not None or (terminal_app is not None and row.get("tty") != "??")
             agents.append(
                 Agent(
                     pid=row["pid"],
@@ -85,6 +97,8 @@ class Scanner:
                     mux=mux,
                     mux_session=mux_session,
                     client_pid=client_pid,
+                    attached_window=attached_window,
+                    terminal_app=terminal_app,
                     telemetry_source=None,
                 )
             )
@@ -105,6 +119,8 @@ class Scanner:
             state_info = instance.get("state") or {}
             workspace = instance.get("workspace") or {}
             context = instance.get("context") or {}
+            model = instance.get("model") or {}
+            session = instance.get("session") or {}
 
             pid = self._to_int(process.get("pid"), default=0)
             if pid <= 0:
@@ -114,6 +130,8 @@ class Scanner:
             tty = row.get("tty") or "??"
             mux, mux_session = self._infer_mux(row, by_pid) if row else (None, None)
             client_pid = self._find_mux_client_pid(mux, mux_session, tty, rows) if row else None
+            terminal_app, _ = self._detect_terminal_target_for_pid(client_pid or pid, by_pid)
+            attached_window = client_pid is not None or (terminal_app is not None and tty != "??")
 
             agents.append(
                 Agent(
@@ -128,11 +146,21 @@ class Scanner:
                     mux=mux,
                     mux_session=mux_session,
                     client_pid=client_pid,
+                    attached_window=attached_window,
+                    terminal_app=terminal_app,
                     telemetry_source=str(instance.get("source") or "pi-telemetry"),
+                    model_provider=str(model.get("provider")) if model.get("provider") is not None else None,
+                    model_id=str(model.get("id")) if model.get("id") is not None else None,
+                    model_name=str(model.get("name")) if model.get("name") is not None else None,
+                    session_id=str(session.get("id")) if session.get("id") is not None else None,
+                    session_name=str(session.get("name")) if session.get("name") is not None else None,
                     context_percent=float(context.get("percent")) if isinstance(context.get("percent"), (int, float)) else None,
                     context_pressure=str(context.get("pressure")) if context.get("pressure") is not None else None,
                     context_close_to_limit=bool(context.get("closeToLimit")) if "closeToLimit" in context else None,
                     context_near_limit=bool(context.get("nearLimit")) if "nearLimit" in context else None,
+                    context_tokens=self._to_int(context.get("tokens")),
+                    context_window=self._to_int(context.get("contextWindow")),
+                    context_remaining_tokens=self._to_int(context.get("remainingTokens")),
                 )
             )
 

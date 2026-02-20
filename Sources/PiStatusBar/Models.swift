@@ -34,25 +34,46 @@ struct AgentState: Identifiable, Decodable, Equatable {
     let mux: String?
     let muxSession: String?
     let clientPid: Int32?
+    let attachedWindow: Bool?
+    let terminalApp: String?
     let telemetrySource: String?
+    let modelProvider: String?
+    let modelId: String?
+    let modelName: String?
+    let sessionId: String?
+    let sessionName: String?
     let contextPercent: Double?
     let contextPressure: String?
     let contextCloseToLimit: Bool?
     let contextNearLimit: Bool?
+    let contextTokens: Int?
+    let contextWindow: Int?
+    let contextRemainingTokens: Int?
 
     enum CodingKeys: String, CodingKey {
         case pid, ppid, state, tty, cpu, cwd, activity, confidence, mux
         case muxSession = "mux_session"
         case clientPid = "client_pid"
+        case attachedWindow = "attached_window"
+        case terminalApp = "terminal_app"
         case telemetrySource = "telemetry_source"
+        case modelProvider = "model_provider"
+        case modelId = "model_id"
+        case modelName = "model_name"
+        case sessionId = "session_id"
+        case sessionName = "session_name"
         case contextPercent = "context_percent"
         case contextPressure = "context_pressure"
         case contextCloseToLimit = "context_close_to_limit"
         case contextNearLimit = "context_near_limit"
+        case contextTokens = "context_tokens"
+        case contextWindow = "context_window"
+        case contextRemainingTokens = "context_remaining_tokens"
     }
 
     var id: Int32 { pid }
     var hasAttachedClient: Bool { clientPid != nil }
+    var hasAttachedWindow: Bool { attachedWindow ?? hasAttachedClient }
 }
 
 struct StatusSummary: Decodable, Equatable {

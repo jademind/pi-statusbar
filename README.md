@@ -15,10 +15,11 @@ This repository contains:
 
 - Shows a live menu bar indicator of overall Pi agent state
 - Lists active agents with:
-  - mux/session + activity
+  - mux/session + telemetry session name + activity
   - cwd path
-  - pid + window attachment status
-  - optional context pressure line
+  - pid + window attachment status (including detected terminal app)
+  - model + token metrics (when telemetry is available)
+  - context pressure line with clear health/mood signal
 - Supports **Jump** to the correct terminal window/session
 - Falls back gracefully when telemetry is unavailable
 
@@ -54,6 +55,18 @@ This repository contains:
   - context pressure (close/near/at limit)
 - Shows attention banners for near/at limit context pressure
 
+### Agent row layout
+
+Each agent row is rendered as:
+
+1. Primary line: mux/session + telemetry session name (when available) + activity
+2. Workspace line: cwd path
+3. Attachment line: `PID <pid> · window attached|no attached window · <terminal app>`
+4. Model metrics line: model name/id + token usage (`used/contextWindow`) when telemetry provides it
+5. Context line: context percent + classification (`healthy`, `close to limit`, `near limit`, `at limit`) with emoji indicator
+
+When telemetry is unavailable, the row gracefully falls back to process-only metadata.
+
 ---
 
 ## Telemetry compatibility (latest `pi-telemetry`)
@@ -68,7 +81,9 @@ This repository contains:
 Compatibility notes:
 
 - Supports telemetry activity mapping (`working`, `waiting_input`, fallback inference)
-- Reads context metrics (`percent`, `pressure`, `closeToLimit`, `nearLimit`)
+- Reads context metrics (`tokens`, `contextWindow`, `remainingTokens`, `percent`, `pressure`, `closeToLimit`, `nearLimit`)
+- Reads model/session metadata for richer UI rows (`model.*`, `session.name`)
+- Adds window attachment/app metadata in daemon responses (`attached_window`, `terminal_app`)
 - Applies stale/alive filtering when reading telemetry files
 - Defensively handles malformed telemetry entries
 
@@ -167,6 +182,11 @@ If status is unhealthy, inspect `~/.pi/agent/statusd.log`.
 - Confirm telemetry is installed: `pi install npm:pi-telemetry`
 - In an active Pi session run: `/pi-telemetry --data`
 - Ensure telemetry files exist under `~/.pi/agent/telemetry/instances`
+
+### Row shows `shell` without session name
+
+- This is expected in process-fallback mode (no telemetry session metadata)
+- With telemetry enabled, `session.name` is shown in the row primary line
 
 ### Jump does not focus expected window
 

@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import SwiftUI
 
 @main
@@ -56,36 +57,84 @@ struct ContentView: View {
     }
 
     private func agentPrimaryLine(_ agent: AgentState) -> String {
-        if let mux = agent.mux, let session = agent.muxSession {
-            return "\(mux): \(session) · \(agent.activity.label)"
+        let cleanedSessionName = agent.sessionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasSessionName = !(cleanedSessionName ?? "").isEmpty
+
+        if let mux = agent.mux, let muxSession = agent.muxSession, hasSessionName {
+            return "\(mux): \(muxSession) · \(cleanedSessionName!) · \(agent.activity.label)"
         }
-        return agent.activity.label
+        if let mux = agent.mux, let muxSession = agent.muxSession {
+            return "\(mux): \(muxSession) · \(agent.activity.label)"
+        }
+        if let mux = agent.mux, hasSessionName {
+            return "\(mux) · \(cleanedSessionName!) · \(agent.activity.label)"
+        }
+        if hasSessionName {
+            return "session: \(cleanedSessionName!) · \(agent.activity.label)"
+        }
+        if let mux = agent.mux {
+            return "\(mux) · \(agent.activity.label)"
+        }
+        return "shell · \(agent.activity.label)"
     }
 
     private func windowStatusText(_ agent: AgentState) -> String {
-        agent.hasAttachedClient ? "window attached" : "no attached window"
+        if agent.hasAttachedWindow {
+            if let app = agent.terminalApp {
+                return "window attached · \(app)"
+            }
+            return "window attached"
+        }
+        if let app = agent.terminalApp {
+            return "no attached window · \(app)"
+        }
+        return "no attached window"
+    }
+
+    private func formatInt(_ value: Int?) -> String? {
+        guard let value else { return nil }
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        return f.string(from: NSNumber(value: value))
+    }
+
+    private func modelMetricsLine(_ agent: AgentState) -> String {
+        let model = agent.modelName ?? agent.modelId ?? "model unknown"
+
+        if let used = formatInt(agent.contextTokens),
+           let limit = formatInt(agent.contextWindow) {
+            return "\(model) · tokens \(used)/\(limit)"
+        }
+
+        if let remaining = formatInt(agent.contextRemainingTokens) {
+            return "\(model) · remaining \(remaining)"
+        }
+
+        return model
+    }
+
+    private func contextMood(_ agent: AgentState) -> (emoji: String, label: String, color: Color) {
+        if agent.contextPressure == "at_limit" {
+            return ("🙁", "at limit", .red)
+        }
+        if agent.contextNearLimit == true {
+            return ("😟", "near limit", .orange)
+        }
+        if agent.contextCloseToLimit == true {
+            return ("☹️", "close to limit", .orange)
+        }
+        return ("🙂", "healthy", .secondary)
     }
 
     private func contextStatusText(_ agent: AgentState) -> String? {
         guard let percent = agent.contextPercent else { return nil }
         let rounded = Int(percent.rounded())
-
-        if agent.contextPressure == "at_limit" {
-            return "Context \(rounded)% · at limit"
-        }
-        if agent.contextNearLimit == true {
-            return "Context \(rounded)% · near limit"
-        }
-        if agent.contextCloseToLimit == true {
-            return "Context \(rounded)% · close to limit"
-        }
-        return "Context \(rounded)%"
+        let mood = contextMood(agent)
+        return "Context \(rounded)% · \(mood.label) \(mood.emoji)"
     }
 
     private func contextStatusColor(_ agent: AgentState) -> Color {
-        if agent.contextPressure == "at_limit" { return .red }
-        if agent.contextNearLimit == true || agent.contextCloseToLimit == true { return .orange }
-        return .secondary
+        contextMood(agent).color
     }
 
     var body: some View {
@@ -152,6 +201,11 @@ struct ContentView: View {
                                     .lineLimit(1)
 
                                 Text("PID \(agent.pid) · \(windowStatusText(agent))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+
+                                Text(modelMetricsLine(agent))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
