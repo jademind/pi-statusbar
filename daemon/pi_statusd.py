@@ -42,8 +42,13 @@ class Scanner:
         by_pid = {r["pid"]: r for r in rows}
         telemetry_instances = self._read_pi_telemetry_instances()
 
+        used_telemetry = False
         if telemetry_instances:
             agents = self._agents_from_telemetry(telemetry_instances, rows, by_pid)
+            if agents:
+                used_telemetry = True
+            else:
+                agents = self._agents_from_processes(rows, by_pid)
         else:
             agents = self._agents_from_processes(rows, by_pid)
 
@@ -54,7 +59,7 @@ class Scanner:
             "agents": [asdict(a) for a in agents],
             "summary": self._summarize(agents),
             "version": 2,
-            "source": "pi-telemetry" if telemetry_instances else "process-fallback",
+            "source": "pi-telemetry" if used_telemetry else "process-fallback",
         }
 
     def _agents_from_processes(self, rows: List[Dict], by_pid: Dict[int, Dict]) -> List[Agent]:
@@ -86,7 +91,12 @@ class Scanner:
         return agents
 
     def _agents_from_telemetry(self, telemetry_instances: List[Dict], rows: List[Dict], by_pid: Dict[int, Dict]) -> List[Agent]:
-        pids = [int(i.get("process", {}).get("pid")) for i in telemetry_instances if i.get("process", {}).get("pid")]
+        pids: List[int] = []
+        for instance in telemetry_instances:
+            pid = self._to_int((instance.get("process") or {}).get("pid"))
+            if pid and pid > 0:
+                pids.append(pid)
+
         cwd_map = self._cwd_map(pids)
         agents: List[Agent] = []
 
@@ -96,7 +106,7 @@ class Scanner:
             workspace = instance.get("workspace") or {}
             context = instance.get("context") or {}
 
-            pid = int(process.get("pid", 0))
+            pid = self._to_int(process.get("pid"), default=0)
             if pid <= 0:
                 continue
 
@@ -113,7 +123,7 @@ class Scanner:
                     tty=str(tty),
                     cpu=float(row.get("cpu") or 0.0),
                     cwd=str(workspace.get("cwd") or cwd_map.get(pid) or "") or None,
-                    activity=self._map_telemetry_activity(state_info.get("activity")),
+                    activity=self._map_telemetry_activity(state_info),
                     confidence="high",
                     mux=mux,
                     mux_session=mux_session,
@@ -129,28 +139,82 @@ class Scanner:
         return agents
 
     def _read_pi_telemetry_instances(self) -> List[Dict]:
-        commands = [["pi-telemetry-snapshot"]]
+        telemetry_dir = Path(os.environ.get("PI_TELEMETRY_DIR", str(Path.home() / ".pi" / "agent" / "telemetry" / "instances")))
+        stale_ms = int(os.environ.get("PI_TELEMETRY_STALE_MS", "10000"))
+        now_ms = int(time.time() * 1000)
 
-        for cmd in commands:
-            try:
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.2)
-            except Exception:
-                continue
-            if proc.returncode != 0 or not proc.stdout.strip():
-                continue
-            try:
+        instances: List[Dict] = []
+
+        if telemetry_dir.exists():
+            for file in telemetry_dir.glob("*.json"):
+                try:
+                    data = json.loads(file.read_text())
+                except Exception:
+                    continue
+
+                process = data.get("process") or {}
+                pid = process.get("pid")
+                updated_at = process.get("updatedAt")
+                if not isinstance(pid, int) or pid <= 0:
+                    continue
+                if not isinstance(updated_at, (int, float)):
+                    continue
+
+                try:
+                    os.kill(pid, 0)
+                except Exception:
+                    continue
+
+                if now_ms - int(updated_at) > stale_ms:
+                    continue
+
+                instances.append(data)
+
+        if instances:
+            return instances
+
+        # Optional fallback to CLI if available.
+        try:
+            proc = subprocess.run(["pi-telemetry-snapshot"], capture_output=True, text=True, timeout=1.2)
+            if proc.returncode == 0 and proc.stdout.strip():
                 payload = json.loads(proc.stdout)
-            except Exception:
-                continue
-            instances = payload.get("instances")
-            if isinstance(instances, list):
-                return instances
+                cli_instances = payload.get("instances")
+                if isinstance(cli_instances, list):
+                    valid: List[Dict] = []
+                    for item in cli_instances:
+                        if not isinstance(item, dict):
+                            continue
+                        process = item.get("process") or {}
+                        pid = self._to_int(process.get("pid"), default=0)
+                        if not pid or pid <= 0:
+                            continue
+                        valid.append(item)
+                    return valid
+        except Exception:
+            pass
+
         return []
 
-    def _map_telemetry_activity(self, activity: object) -> str:
-        if activity == "working":
+    def _map_telemetry_activity(self, state_info: Dict | object) -> str:
+        if isinstance(state_info, dict):
+            activity = state_info.get("activity")
+            if activity == "working":
+                return "running"
+            if activity == "waiting_input":
+                return "waiting_input"
+
+            # Defensive compatibility: infer from boolean state fields if activity is absent.
+            if state_info.get("waitingForInput") is True:
+                return "waiting_input"
+            if state_info.get("busy") is True or state_info.get("isIdle") is False:
+                return "running"
+            if state_info.get("isIdle") is True:
+                return "unknown"
+            return "unknown"
+
+        if state_info == "working":
             return "running"
-        if activity == "waiting_input":
+        if state_info == "waiting_input":
             return "waiting_input"
         return "unknown"
 
@@ -796,6 +860,15 @@ return "no"
 
     def _sh_quote(self, s: str) -> str:
         return "'" + s.replace("'", "'\\''") + "'"
+
+    def _to_int(self, value: object, default: int | None = None) -> int | None:
+        try:
+            if isinstance(value, bool):
+                return default
+            parsed = int(value)  # type: ignore[arg-type]
+            return parsed
+        except Exception:
+            return default
 
 
 def parse_request(req: str, scanner: Scanner) -> Dict:
