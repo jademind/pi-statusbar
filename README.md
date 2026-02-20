@@ -15,6 +15,62 @@ Current version: **0.1.0**
 
 ---
 
+## Quick start (validated)
+
+### Prerequisites
+
+- macOS (menu bar app)
+- Swift toolchain (`swift --version`)
+- Python 3 (`python3 --version`)
+- Pi installed (recommended for realistic testing)
+
+### 1) Clone and enter repository
+
+```bash
+git clone https://github.com/jademind/pi-statusbar.git
+cd pi-statusbar
+```
+
+### 2) Build the app
+
+```bash
+swift build
+```
+
+### 3) Start the daemon
+
+```bash
+daemon/statusdctl restart
+daemon/statusdctl status
+daemon/statusdctl ping
+```
+
+Expected: `status` shows running daemon + healthy socket, and `ping` returns `{"ok": true, "pong": true, ...}`.
+
+### 4) Run the status bar app
+
+```bash
+swift run PiStatusBar
+```
+
+The `π` icon should appear in the macOS menu bar.
+
+### 5) (Optional, recommended) Enable telemetry source
+
+```bash
+pi install npm:pi-telemetry
+```
+
+Then, in an active Pi session:
+
+```bash
+/pi-telemetry --data
+```
+
+If telemetry is active, the app should show `source: telemetry`.
+
+---
+
 ## Privacy and sensitive data
 
 - This README avoids machine-specific absolute paths and credentials.
