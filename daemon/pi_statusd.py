@@ -6,6 +6,7 @@ import json
 import os
 import re
 import socket
+import html as html_lib
 import subprocess
 import time
 import tempfile
@@ -51,6 +52,7 @@ class Agent:
     session_file: str | None = None
     latest_message: str | None = None
     latest_message_full: str | None = None
+    latest_message_html: str | None = None
     latest_message_at: int | None = None
 
 
@@ -119,6 +121,7 @@ class Scanner:
                     telemetry_source=None,
                     latest_message=latest_message,
                     latest_message_full=None,
+                    latest_message_html=None,
                 )
             )
         return agents
@@ -148,16 +151,25 @@ class Scanner:
             session_file = str(session.get("file") or "").strip() or None
             telemetry_messages = instance.get("messages") or {}
             telemetry_last_text = self._clean_message_text(str(telemetry_messages.get("lastAssistantText") or ""))
+            telemetry_last_html = str(telemetry_messages.get("lastAssistantHtml") or "").strip()
+            telemetry_html_text = self._html_to_text(telemetry_last_html)
 
-            latest_message_full = telemetry_last_text or None
+            latest_message_full = telemetry_last_text or telemetry_html_text or None
+            latest_message_html = telemetry_last_html or None
             latest_message_at = self._extract_timestamp_ms(telemetry_messages) if isinstance(telemetry_messages, dict) else None
 
             latest_message = self._message_gist(latest_message_full)
-            if not latest_message and session_file:
+            if session_file and not latest_message_full:
                 parsed_text, parsed_ts = self._latest_assistant_message(session_file)
-                latest_message = self._message_gist(parsed_text)
+                if not latest_message_full:
+                    latest_message_full = parsed_text
+                if not latest_message:
+                    latest_message = self._message_gist(parsed_text)
                 if latest_message_at is None:
                     latest_message_at = parsed_ts
+
+            if not latest_message_html:
+                latest_message_html = self._message_html(latest_message_full)
 
             row = by_pid.get(pid, {})
             tty = row.get("tty") or "??"
@@ -196,7 +208,8 @@ class Scanner:
                     context_remaining_tokens=self._to_int(context.get("remainingTokens")),
                     session_file=session_file,
                     latest_message=latest_message,
-                    latest_message_full=None,
+                    latest_message_full=latest_message_full,
+                    latest_message_html=latest_message_html,
                     latest_message_at=latest_message_at,
                 )
             )
@@ -293,6 +306,7 @@ class Scanner:
         session_file: str | None = None
         latest_at: int | None = None
         latest_full: str | None = None
+        latest_html: str | None = None
 
         telemetry_instances = self._read_pi_telemetry_instances()
         for inst in telemetry_instances:
@@ -310,8 +324,13 @@ class Scanner:
             msgs = inst.get("messages")
             if isinstance(msgs, dict):
                 t = self._clean_message_text(str(msgs.get("lastAssistantText") or ""))
+                h = str(msgs.get("lastAssistantHtml") or "").strip()
                 if t:
                     latest_full = t
+                elif h:
+                    latest_full = self._html_to_text(h)
+                if h:
+                    latest_html = h
                 latest_at = self._extract_timestamp_ms(msgs)
             break
 
@@ -325,6 +344,9 @@ class Scanner:
             mux, mux_session = self._infer_mux(row, by_pid)
             latest_full = self._latest_runtime_preview(pid, mux, mux_session, tty)
 
+        if not latest_html:
+            latest_html = self._message_html(latest_full)
+
         latest_gist = self._message_gist(latest_full)
 
         return {
@@ -333,6 +355,7 @@ class Scanner:
             "session_file": session_file,
             "latest_message": latest_gist,
             "latest_message_full": latest_full,
+            "latest_message_html": latest_html,
             "latest_message_at": latest_at,
         }
 
@@ -673,6 +696,25 @@ class Scanner:
             return compact
         return "..." + compact[-417:]
 
+    def _message_html(self, text: str | None) -> str | None:
+        if not text:
+            return None
+        escaped = html_lib.escape(text)
+        return f"<div class=\"pi-last-assistant\"><pre>{escaped}</pre></div>"
+
+    def _html_to_text(self, html: str | None) -> str | None:
+        if not html:
+            return None
+        raw = str(html).strip()
+        if not raw:
+            return None
+        text = re.sub(r"<br\s*/?>", "\n", raw, flags=re.IGNORECASE)
+        text = re.sub(r"</(p|div|li|h[1-6]|tr)>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", "", text)
+        text = html_lib.unescape(text)
+        cleaned = self._clean_message_text(text)
+        return cleaned or None
+
     def _looks_like_tool_trace(self, text: str) -> bool:
         low = text.lower().strip()
         tool_markers = (
@@ -825,20 +867,20 @@ class Scanner:
                     return None
             return None
 
-        for key in ("timestamp", "ts", "createdAt", "updatedAt"):
+        for key in ("timestamp", "ts", "createdAt", "updatedAt", "lastAssistantUpdatedAt"):
             out = norm(obj.get(key))
             if out is not None:
                 return out
 
         payload = self._message_payload(obj)
-        for key in ("timestamp", "ts", "createdAt", "updatedAt"):
+        for key in ("timestamp", "ts", "createdAt", "updatedAt", "lastAssistantUpdatedAt"):
             out = norm(payload.get(key))
             if out is not None:
                 return out
 
         data = obj.get("data")
         if isinstance(data, dict):
-            for key in ("timestamp", "ts", "createdAt", "updatedAt"):
+            for key in ("timestamp", "ts", "createdAt", "updatedAt", "lastAssistantUpdatedAt"):
                 out = norm(data.get(key))
                 if out is not None:
                     return out

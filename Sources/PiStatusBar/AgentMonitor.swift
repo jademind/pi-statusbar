@@ -89,16 +89,10 @@ final class AgentMonitor: ObservableObject {
         return true
     }
 
-    func latestFullMessage(for agent: AgentState) -> String? {
+    func latestMessageResponse(for agent: AgentState) -> LatestMessageResponse? {
         guard let response = DaemonClient.latest(pid: agent.pid), response.ok else {
             return nil
         }
-        if let full = response.latestMessageFull?.trimmingCharacters(in: .whitespacesAndNewlines), !full.isEmpty {
-            return full
-        }
-        if let gist = response.latestMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !gist.isEmpty {
-            return gist
-        }
-        return nil
+        return response
     }
 }

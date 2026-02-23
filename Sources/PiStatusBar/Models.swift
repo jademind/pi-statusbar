@@ -51,6 +51,7 @@ struct AgentState: Identifiable, Decodable, Equatable {
     let contextRemainingTokens: Int?
     let latestMessage: String?
     let latestMessageFull: String?
+    let latestMessageHtml: String?
     let latestMessageAt: Int?
 
     enum CodingKeys: String, CodingKey {
@@ -74,6 +75,7 @@ struct AgentState: Identifiable, Decodable, Equatable {
         case contextRemainingTokens = "context_remaining_tokens"
         case latestMessage = "latest_message"
         case latestMessageFull = "latest_message_full"
+        case latestMessageHtml = "latest_message_html"
         case latestMessageAt = "latest_message_at"
     }
 
@@ -154,6 +156,7 @@ struct LatestMessageResponse: Decodable {
     let pid: Int32?
     let latestMessage: String?
     let latestMessageFull: String?
+    let latestMessageHtml: String?
     let latestMessageAt: Int?
     let error: String?
 
@@ -161,6 +164,7 @@ struct LatestMessageResponse: Decodable {
         case ok, pid, error
         case latestMessage = "latest_message"
         case latestMessageFull = "latest_message_full"
+        case latestMessageHtml = "latest_message_html"
         case latestMessageAt = "latest_message_at"
     }
 }

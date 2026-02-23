@@ -11,7 +11,7 @@ This repository contains:
 
 ## Version
 
-Current version: **0.1.1**
+Current version: **0.1.2**
 
 ---
 
@@ -87,7 +87,17 @@ If telemetry is active, the app should show `source: telemetry`.
   - model + token metrics (when telemetry is available)
   - context pressure line with clear health/mood signal
 - Supports **Jump** to the correct terminal window/session
+- Provides a dedicated **detail panel** for the selected agent with:
+  - rich HTML/Markdown rendering of the latest assistant output
+  - `Reply` text field + `Send` action
+  - `Jump`, `Refresh`, and `Collapse` controls
 - Falls back gracefully when telemetry is unavailable
+
+### Latest UI (v0.1.2)
+
+The detail panel now renders telemetry HTML in a sandboxed WebView with improved typography, list spacing, and heading layout.
+
+![Pi Status Bar detail panel with rich HTML rendering](docs/screenshots/statusbar-detail-rich-html-2026-02-23.png)
 
 ### State colors
 
@@ -107,6 +117,9 @@ If telemetry is active, the app should show `source: telemetry`.
   - `status`
   - `ping`
   - `jump <pid>`
+  - `latest <pid>`
+  - `send <pid> <message>`
+  - `watch [timeout_ms] [fingerprint]`
 - Status payload version: `2`
 - Source field values:
   - `pi-telemetry`
@@ -229,6 +242,15 @@ swift build
 - Keep daemon and app restarted after daemon/UI changes
 - If UI shows fallback unexpectedly, verify active Pi sessions are emitting telemetry (`/pi-telemetry`)
 - Socket is user-local (`0600` permissions)
+- Detail HTML rendering uses a sandboxed `WKWebView` configuration:
+  - content JavaScript disabled
+  - non-persistent web data store
+  - external navigation blocked (`about:` / `data:` only)
+  - script tags and inline event handlers stripped before load
+- Performance notes:
+  - daemon status polling runs every 2s
+  - selected detail panel refreshes incrementally using `latest_message_at`
+  - latest message text/html are cached per PID in the UI
 
 ---
 
