@@ -172,6 +172,9 @@ Commands:
   restart           Restart pi-statusd
   status            Show process + socket health
   ping              Check daemon socket health only
+  latest <pid>      Show latest assistant message for pid (telemetry-backed)
+  send <pid> <msg>  Send message to pid via mux/tty injection
+  watch [ms] [fp]   Wait for status/message change and return event JSON
   terminal          Show configured default terminal (auto/Ghostty/iTerm2/Terminal)
   terminal <value>  Set terminal: auto | Ghostty | iTerm2 | Terminal
 EOF
@@ -194,6 +197,31 @@ case "$cmd" in
     ;;
   ping)
     python3 "$DAEMON" --request ping
+    ;;
+  latest)
+    if [[ $# -lt 2 ]]; then
+      echo "Usage: daemon/statusdctl latest <pid>"
+      exit 2
+    fi
+    python3 "$DAEMON" --request "latest $2"
+    ;;
+  send)
+    if [[ $# -lt 3 ]]; then
+      echo "Usage: daemon/statusdctl send <pid> <message>"
+      exit 2
+    fi
+    pid="$2"
+    shift 2
+    python3 "$DAEMON" --request "send $pid $*"
+    ;;
+  watch)
+    if [[ $# -eq 1 ]]; then
+      python3 "$DAEMON" --request "watch"
+    elif [[ $# -eq 2 ]]; then
+      python3 "$DAEMON" --request "watch $2"
+    else
+      python3 "$DAEMON" --request "watch $2 $3"
+    fi
     ;;
   terminal)
     if [[ $# -ge 2 ]]; then

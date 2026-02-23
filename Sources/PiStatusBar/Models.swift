@@ -49,6 +49,9 @@ struct AgentState: Identifiable, Decodable, Equatable {
     let contextTokens: Int?
     let contextWindow: Int?
     let contextRemainingTokens: Int?
+    let latestMessage: String?
+    let latestMessageFull: String?
+    let latestMessageAt: Int?
 
     enum CodingKeys: String, CodingKey {
         case pid, ppid, state, tty, cpu, cwd, activity, confidence, mux
@@ -69,6 +72,9 @@ struct AgentState: Identifiable, Decodable, Equatable {
         case contextTokens = "context_tokens"
         case contextWindow = "context_window"
         case contextRemainingTokens = "context_remaining_tokens"
+        case latestMessage = "latest_message"
+        case latestMessageFull = "latest_message_full"
+        case latestMessageAt = "latest_message_at"
     }
 
     var id: Int32 { pid }
@@ -126,5 +132,35 @@ struct JumpResponse: Decodable {
         case openedAttach = "opened_attach"
         case openedShell = "opened_shell"
         case fallbackOpened = "fallback_opened"
+    }
+}
+
+struct SendMessageResponse: Decodable {
+    let ok: Bool
+    let pid: Int32?
+    let delivery: String?
+    let muxSession: String?
+    let tty: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, pid, delivery, tty, error
+        case muxSession = "mux_session"
+    }
+}
+
+struct LatestMessageResponse: Decodable {
+    let ok: Bool
+    let pid: Int32?
+    let latestMessage: String?
+    let latestMessageFull: String?
+    let latestMessageAt: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, pid, error
+        case latestMessage = "latest_message"
+        case latestMessageFull = "latest_message_full"
+        case latestMessageAt = "latest_message_at"
     }
 }

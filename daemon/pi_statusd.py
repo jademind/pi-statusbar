@@ -4,10 +4,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 import time
+import tempfile
 import pwd
+import unicodedata
+from datetime import datetime
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List
@@ -44,23 +48,34 @@ class Agent:
     context_tokens: int | None = None
     context_window: int | None = None
     context_remaining_tokens: int | None = None
+    session_file: str | None = None
+    latest_message: str | None = None
+    latest_message_full: str | None = None
+    latest_message_at: int | None = None
 
 
 class Scanner:
+    def __init__(self) -> None:
+        self._runtime_preview_cache: Dict[int, Dict] = {}
+        self._session_message_cache: Dict[str, Dict] = {}
+
     def scan(self) -> Dict:
         rows = self._ps_rows()
         by_pid = {r["pid"]: r for r in rows}
         telemetry_instances = self._read_pi_telemetry_instances()
 
-        used_telemetry = False
-        if telemetry_instances:
-            agents = self._agents_from_telemetry(telemetry_instances, rows, by_pid)
-            if agents:
-                used_telemetry = True
-            else:
-                agents = self._agents_from_processes(rows, by_pid)
+        process_agents = self._agents_from_processes(rows, by_pid)
+        telemetry_agents = self._agents_from_telemetry(telemetry_instances, rows, by_pid) if telemetry_instances else []
+
+        if telemetry_agents:
+            merged: Dict[int, Agent] = {a.pid: a for a in process_agents}
+            for t in telemetry_agents:
+                merged[t.pid] = t
+            agents = list(merged.values())
+            used_telemetry = True
         else:
-            agents = self._agents_from_processes(rows, by_pid)
+            agents = process_agents
+            used_telemetry = False
 
         agents.sort(key=lambda a: a.pid)
         return {
@@ -81,6 +96,8 @@ class Scanner:
         for row in pi_rows:
             activity, confidence = self._infer_activity(row)
             mux, mux_session = self._infer_mux(row, by_pid)
+            latest_message_full = None
+            latest_message = None
             client_pid = self._find_mux_client_pid(mux, mux_session, row["tty"], rows)
             terminal_app, _ = self._detect_terminal_target_for_pid(client_pid or row["pid"], by_pid)
             attached_window = client_pid is not None or (terminal_app is not None and row.get("tty") != "??")
@@ -100,6 +117,8 @@ class Scanner:
                     attached_window=attached_window,
                     terminal_app=terminal_app,
                     telemetry_source=None,
+                    latest_message=latest_message,
+                    latest_message_full=None,
                 )
             )
         return agents
@@ -125,6 +144,20 @@ class Scanner:
             pid = self._to_int(process.get("pid"), default=0)
             if pid <= 0:
                 continue
+
+            session_file = str(session.get("file") or "").strip() or None
+            telemetry_messages = instance.get("messages") or {}
+            telemetry_last_text = self._clean_message_text(str(telemetry_messages.get("lastAssistantText") or ""))
+
+            latest_message_full = telemetry_last_text or None
+            latest_message_at = self._extract_timestamp_ms(telemetry_messages) if isinstance(telemetry_messages, dict) else None
+
+            latest_message = self._message_gist(latest_message_full)
+            if not latest_message and session_file:
+                parsed_text, parsed_ts = self._latest_assistant_message(session_file)
+                latest_message = self._message_gist(parsed_text)
+                if latest_message_at is None:
+                    latest_message_at = parsed_ts
 
             row = by_pid.get(pid, {})
             tty = row.get("tty") or "??"
@@ -161,6 +194,10 @@ class Scanner:
                     context_tokens=self._to_int(context.get("tokens")),
                     context_window=self._to_int(context.get("contextWindow")),
                     context_remaining_tokens=self._to_int(context.get("remainingTokens")),
+                    session_file=session_file,
+                    latest_message=latest_message,
+                    latest_message_full=None,
+                    latest_message_at=latest_message_at,
                 )
             )
 
@@ -245,6 +282,567 @@ class Scanner:
         if state_info == "waiting_input":
             return "waiting_input"
         return "unknown"
+
+    def latest_message(self, pid: int) -> Dict:
+        status = self.scan()
+        items = status.get("agents") if isinstance(status, dict) else []
+        if not isinstance(items, list):
+            items = []
+
+        item = next((a for a in items if isinstance(a, dict) and int(a.get("pid") or 0) == pid), None)
+        if not item:
+            return {"ok": False, "error": f"pi pid not found: {pid}"}
+
+        session_file = item.get("session_file")
+        latest_at = item.get("latest_message_at")
+        latest_full: str | None = None
+
+        telemetry_instances = self._read_pi_telemetry_instances()
+        for inst in telemetry_instances:
+            proc = inst.get("process") if isinstance(inst, dict) else None
+            if not isinstance(proc, dict):
+                continue
+            if self._to_int(proc.get("pid"), default=0) != pid:
+                continue
+            msgs = inst.get("messages")
+            if isinstance(msgs, dict):
+                t = self._clean_message_text(str(msgs.get("lastAssistantText") or ""))
+                if t:
+                    latest_full = t
+                    latest_at = self._extract_timestamp_ms(msgs) or latest_at
+            break
+
+        if not latest_full and session_file:
+            latest_full, ts = self._latest_assistant_message(str(session_file))
+            if ts is not None:
+                latest_at = ts
+
+        if not latest_full:
+            rows = self._ps_rows()
+            by_pid = {r["pid"]: r for r in rows}
+            row = by_pid.get(pid, {})
+            tty = row.get("tty") or "??"
+            mux, mux_session = self._infer_mux(row, by_pid) if row else (None, None)
+            latest_full = self._latest_runtime_preview(pid, mux, mux_session, tty)
+
+        latest_gist = self._message_gist(latest_full)
+
+        return {
+            "ok": True,
+            "pid": pid,
+            "session_file": session_file,
+            "latest_message": latest_gist,
+            "latest_message_full": latest_full,
+            "latest_message_at": latest_at,
+        }
+
+    def send_message(self, pid: int, message: str) -> Dict:
+        text = (message or "").strip()
+        if not text:
+            return {"ok": False, "error": "message is empty"}
+
+        rows = self._ps_rows()
+        by_pid = {r["pid"]: r for r in rows}
+        row = next((r for r in rows if r["pid"] == pid and r["comm"] == "pi"), None)
+        if row is None:
+            return {"ok": False, "error": f"pi pid not found: {pid}"}
+
+        tty = row.get("tty")
+        mux, mux_session = self._infer_mux(row, by_pid)
+
+        # Prefer deterministic mux injection.
+        if mux == "zellij" and mux_session:
+            try:
+                proc = subprocess.run(
+                    ["zellij", "--session", mux_session, "action", "write-chars", text],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.2,
+                )
+                if proc.returncode == 0:
+                    subprocess.run(
+                        ["zellij", "--session", mux_session, "action", "write", "13"],
+                        capture_output=True,
+                        text=True,
+                        timeout=1.2,
+                    )
+                    return {"ok": True, "pid": pid, "delivery": "zellij", "mux_session": mux_session}
+            except Exception:
+                pass
+
+        if mux == "tmux" and mux_session:
+            try:
+                proc = subprocess.run(
+                    ["tmux", "-L", mux_session, "send-keys", text, "Enter"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.2,
+                )
+                if proc.returncode == 0:
+                    return {"ok": True, "pid": pid, "delivery": "tmux", "mux_session": mux_session}
+            except Exception:
+                pass
+
+        # Last-resort TTY injection.
+        if tty and tty != "??":
+            tty_path = f"/dev/{tty}"
+            try:
+                with open(tty_path, "w", encoding="utf-8", errors="ignore") as f:
+                    f.write(text)
+                    f.write("\n")
+                return {"ok": True, "pid": pid, "delivery": "tty", "tty": tty}
+            except Exception:
+                pass
+
+        return {
+            "ok": False,
+            "error": "could not deliver message (no reachable mux client or tty)",
+            "pid": pid,
+            "mux": mux,
+            "mux_session": mux_session,
+            "tty": tty,
+        }
+
+    def _latest_assistant_message(self, session_file: str | None) -> tuple[str | None, int | None]:
+        if not session_file:
+            return None, None
+
+        path = Path(session_file)
+        if not path.exists() or not path.is_file():
+            return None, None
+
+        try:
+            stat = path.stat()
+            key = str(path)
+            cached = self._session_message_cache.get(key)
+            if cached and cached.get("mtime") == stat.st_mtime_ns and cached.get("size") == stat.st_size:
+                return cached.get("text"), cached.get("ts")
+
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - 512 * 1024), os.SEEK_SET)
+                chunk = f.read().decode("utf-8", errors="ignore")
+        except Exception:
+            return None, None
+
+        chunks: List[str] = []
+        latest_ts: int | None = None
+        started = False
+        fallback_text: str | None = None
+        fallback_ts: int | None = None
+
+        for line in reversed(chunk.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                obj = json.loads(line)
+            except Exception:
+                if started:
+                    break
+                continue
+
+            is_assistant = self._is_assistant_message_obj(obj)
+            if not is_assistant:
+                if started and self._is_user_message_obj(obj):
+                    break
+                if started:
+                    continue
+                continue
+
+            text = self._extract_text(obj)
+            if not text:
+                continue
+
+            text = self._clean_message_text(text)
+            if not text:
+                continue
+
+            ts = self._extract_timestamp_ms(obj)
+            if latest_ts is None and ts is not None:
+                latest_ts = ts
+
+            if self._looks_like_tool_trace(text):
+                continue
+
+            if self._looks_like_thinking_or_status(text):
+                if fallback_text is None:
+                    fallback_text = text
+                    fallback_ts = ts
+                continue
+
+            started = True
+            chunks.append(text)
+
+        if chunks:
+            chunks.reverse()
+            merged = self._merge_message_chunks(chunks)
+            if len(merged) > 12000:
+                merged = merged[:11997] + "..."
+            self._session_message_cache[str(path)] = {
+                "mtime": stat.st_mtime_ns,
+                "size": stat.st_size,
+                "text": merged,
+                "ts": latest_ts,
+            }
+            return merged, latest_ts
+
+        if fallback_text:
+            fallback_text = self._strip_noise_lines(fallback_text)
+            if len(fallback_text) > 8000:
+                fallback_text = fallback_text[:7997] + "..."
+            self._session_message_cache[str(path)] = {
+                "mtime": stat.st_mtime_ns,
+                "size": stat.st_size,
+                "text": fallback_text,
+                "ts": fallback_ts,
+            }
+            return fallback_text, fallback_ts
+
+        self._session_message_cache[str(path)] = {
+            "mtime": stat.st_mtime_ns,
+            "size": stat.st_size,
+            "text": None,
+            "ts": None,
+        }
+        return None, None
+
+    def _latest_runtime_preview(self, pid: int, mux: str | None, mux_session: str | None, tty: str | None) -> str | None:
+        cached = self._runtime_preview_cache.get(pid)
+        now = time.time()
+        if cached and (now - float(cached.get("ts", 0))) < 4.0:
+            return cached.get("msg")
+
+        text: str | None = None
+
+        if mux == "zellij" and mux_session:
+            text = self._zellij_tail_preview(mux_session)
+        elif mux == "tmux" and mux_session:
+            text = self._tmux_tail_preview(mux_session)
+
+        if not text and tty and tty != "??":
+            text = f"waiting on {tty}"
+
+        self._runtime_preview_cache[pid] = {"ts": now, "msg": text}
+        return text
+
+    def _zellij_tail_preview(self, mux_session: str) -> str | None:
+        try:
+            with tempfile.NamedTemporaryFile(prefix="statusd-zellij-", suffix=".txt", delete=False) as tmp:
+                tmp_path = tmp.name
+        except Exception:
+            return None
+
+        try:
+            proc = subprocess.run(
+                ["zellij", "--session", mux_session, "action", "dump-screen", "--full", tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+            if proc.returncode != 0:
+                return None
+            try:
+                content = Path(tmp_path).read_text(errors="ignore")
+            except Exception:
+                return None
+            return self._preview_from_terminal_dump(content)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    def _tmux_tail_preview(self, mux_session: str) -> str | None:
+        try:
+            proc = subprocess.run(
+                ["tmux", "-L", mux_session, "capture-pane", "-p", "-S", "-2000"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+            if proc.returncode != 0:
+                return None
+            return self._preview_from_terminal_dump(proc.stdout)
+        except Exception:
+            return None
+
+    def _preview_from_terminal_dump(self, content: str | None) -> str | None:
+        if not content:
+            return None
+
+        raw_lines = [self._clean_message_text(ln) for ln in content.splitlines()]
+        lines = [ln for ln in raw_lines if ln]
+        if not lines:
+            return None
+
+        selected: List[str] = []
+        for line in reversed(lines):
+            low = line.lower()
+            if low.startswith(("$", "%", "❯", "➜", "~", "pi>")):
+                continue
+            if re.fullmatch(r"[-─═_\s>]+", line):
+                continue
+            if "statusd" in low and "blocked" in low:
+                continue
+            selected.append(line)
+            if len(selected) >= 220:
+                break
+
+        if not selected:
+            return None
+
+        selected.reverse()
+        text = "\n".join(selected).strip()
+        if len(text) > 12000:
+            text = text[:11997] + "..."
+        return text
+
+    def _clean_message_text(self, text: str | None) -> str:
+        if not text:
+            return ""
+
+        # Remove ANSI escape sequences.
+        out = re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", text)
+
+        # Remove private-use and control chars that render as broken icon glyphs.
+        cleaned_chars: List[str] = []
+        for ch in out:
+            cat = unicodedata.category(ch)
+            if cat == "Co":
+                continue
+            if cat == "Cc" and ch not in ("\n", "\t"):
+                continue
+            cleaned_chars.append(ch)
+
+        out = "".join(cleaned_chars)
+
+        # Normalize spacing but keep line breaks for expanded view.
+        lines = [ln.rstrip() for ln in out.splitlines()]
+        out = "\n".join(lines).strip()
+
+        # Collapse too many blank lines.
+        out = re.sub(r"\n{3,}", "\n\n", out)
+        return out
+
+    def _merge_message_chunks(self, chunks: List[str]) -> str:
+        merged: List[str] = []
+        for chunk in chunks:
+            c = chunk.strip()
+            if not c:
+                continue
+            if merged and merged[-1] == c:
+                continue
+            # Handle cumulative streaming chunks where newer chunk extends older text.
+            if merged and len(c) > len(merged[-1]) and c.startswith(merged[-1]):
+                merged[-1] = c
+                continue
+            merged.append(c)
+        out = "\n".join(merged).strip()
+        return self._strip_noise_lines(out)
+
+    def _strip_noise_lines(self, text: str) -> str:
+        lines: List[str] = []
+        for ln in text.splitlines():
+            low = ln.lower().strip()
+            if not low:
+                lines.append(ln)
+                continue
+            if "/var/folders/" in low and "screenshot" in low:
+                continue
+            if "daemon/statusdctl" in low or "swift run pistatusbar" in low:
+                continue
+            if low.startswith(("edit ", "write ", "read ", "bash ", "rg ", "find ", "python3 ")):
+                continue
+            if "processes:" in low and "pi-statusbar-app" in low:
+                continue
+            if "visual latest" in low:
+                continue
+            lines.append(ln)
+        out = "\n".join(lines).strip()
+        out = re.sub(r"\n{3,}", "\n\n", out)
+        return out
+
+    def _message_gist(self, text: str | None) -> str | None:
+        if not text:
+            return None
+        compact = " ".join(text.split())
+        if len(compact) <= 420:
+            return compact
+        return "..." + compact[-417:]
+
+    def _looks_like_tool_trace(self, text: str) -> bool:
+        low = text.lower().strip()
+        tool_markers = (
+            "edit ", "write ", "read ", "bash ", "rg ", "find ", "python3 ",
+            "daemon/statusdctl", "swift build", "processes:", "stderr:", "stdout:",
+            "recipient_name", "tool_uses", "json.tool", "command exited with code",
+        )
+        if any(marker in low for marker in tool_markers):
+            return True
+        if low.startswith(("{" , "[")) and ("recipient_name" in low or "parameters" in low):
+            return True
+        return False
+
+    def _looks_like_thinking_or_status(self, text: str) -> bool:
+        low = text.lower()
+        if "thinking" in low or "reasoning" in low:
+            return True
+        if "working..." in low or "visual latest" in low:
+            return True
+        if "processes:" in low and "pi-statusbar-app" in low:
+            return True
+        if "gpt-5" in low and "think:" in low:
+            return True
+        return False
+
+    def _is_preview_line_candidate(self, line: str) -> bool:
+        low = line.lower()
+        if low.startswith(("$", "%", "❯", "➜", "~", "pi>")):
+            return False
+        if "statusd" in low and "blocked" in low:
+            return False
+        if "processes:" in low and "pi-statusbar-app" in low:
+            return False
+        if "visual latest" in low:
+            return False
+        if "gpt-5" in low and "think:" in low:
+            return False
+        if "pkgs" in low and "visual:" in low:
+            return False
+
+        if re.fullmatch(r"[-─═_\s>]+", line):
+            return False
+
+        alpha_count = sum(1 for ch in line if ch.isalpha())
+        digit_count = sum(1 for ch in line if ch.isdigit())
+        punctuation_count = sum(1 for ch in line if not ch.isalnum() and not ch.isspace())
+        total = max(1, len(line))
+
+        if (alpha_count + digit_count) < 8:
+            return False
+
+        if (punctuation_count / total) > 0.40:
+            return False
+
+        return True
+
+    def _message_payload(self, obj: Dict) -> Dict:
+        if str(obj.get("type") or "").lower() == "message" and isinstance(obj.get("message"), dict):
+            return obj.get("message") or {}
+        return obj
+
+    def _is_user_message_obj(self, obj: Dict) -> bool:
+        payload = self._message_payload(obj)
+        role = str(payload.get("role") or "").lower()
+        return role == "user"
+
+    def _is_assistant_message_obj(self, obj: Dict) -> bool:
+        payload = self._message_payload(obj)
+        role = str(payload.get("role") or "").lower()
+        if role in ("tool", "toolresult", "tool_result", "system", "user"):
+            return False
+        return role in ("assistant", "agent", "model")
+
+    def _extract_text(self, obj: object) -> str | None:
+        if isinstance(obj, str):
+            s = obj.strip()
+            return s or None
+
+        if isinstance(obj, list):
+            parts: List[str] = []
+            for item in obj:
+                t = self._extract_text(item)
+                if t:
+                    parts.append(t)
+            if not parts:
+                return None
+            return "\n".join(parts)
+
+        if not isinstance(obj, dict):
+            return None
+
+        payload = self._message_payload(obj)
+
+        obj_type = str(payload.get("type") or "").lower()
+        obj_role = str(payload.get("role") or "").lower()
+        if obj_type in ("reasoning", "thinking", "analysis", "toolcall", "tool_call", "toolresult", "tool_result"):
+            return None
+        if obj_role in ("reasoning", "thinking", "tool", "toolresult", "tool_result"):
+            return None
+
+        content = payload.get("content")
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    item_type = str(item.get("type") or "").lower()
+                    if item_type in (
+                        "reasoning", "thinking", "analysis", "input_text", "input", "user",
+                        "toolcall", "tool_call", "toolresult", "tool_result", "summary", "summary_text",
+                    ):
+                        continue
+                    if item_type in ("text", "output_text"):
+                        t = self._extract_text(item.get("text"))
+                    else:
+                        t = self._extract_text(item.get("content") or item.get("text") or item.get("output"))
+                    if t:
+                        parts.append(t)
+                else:
+                    t = self._extract_text(item)
+                    if t:
+                        parts.append(t)
+            if parts:
+                return "\n".join(parts)
+
+        for key in ("text", "output"):
+            if key in payload:
+                t = self._extract_text(payload.get(key))
+                if t:
+                    return t
+
+        return None
+
+    def _extract_timestamp_ms(self, obj: Dict) -> int | None:
+        def norm(value: object) -> int | None:
+            if isinstance(value, (int, float)):
+                n = int(value)
+                if n > 1_000_000_000_000:
+                    return n
+                if n > 1_000_000_000:
+                    return n * 1000
+                return None
+            if isinstance(value, str):
+                s = value.strip()
+                if not s:
+                    return None
+                try:
+                    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                    return int(dt.timestamp() * 1000)
+                except Exception:
+                    return None
+            return None
+
+        for key in ("timestamp", "ts", "createdAt", "updatedAt"):
+            out = norm(obj.get(key))
+            if out is not None:
+                return out
+
+        payload = self._message_payload(obj)
+        for key in ("timestamp", "ts", "createdAt", "updatedAt"):
+            out = norm(payload.get(key))
+            if out is not None:
+                return out
+
+        data = obj.get("data")
+        if isinstance(data, dict):
+            for key in ("timestamp", "ts", "createdAt", "updatedAt"):
+                out = norm(data.get(key))
+                if out is not None:
+                    return out
+        return None
 
     def jump(self, pid: int) -> Dict:
         rows = self._ps_rows()
@@ -911,7 +1509,65 @@ def parse_request(req: str, scanner: Scanner) -> Dict:
             return scanner.jump(int(pid_s.strip()))
         except ValueError:
             return {"ok": False, "error": f"invalid pid: {pid_s}"}
+    if req.startswith("latest "):
+        _, pid_s = req.split(" ", 1)
+        try:
+            return scanner.latest_message(int(pid_s.strip()))
+        except ValueError:
+            return {"ok": False, "error": f"invalid pid: {pid_s}"}
+    if req.startswith("send "):
+        parts = req.split(" ", 2)
+        if len(parts) < 3:
+            return {"ok": False, "error": "usage: send <pid> <message>"}
+        _, pid_s, message = parts
+        try:
+            return scanner.send_message(int(pid_s.strip()), message)
+        except ValueError:
+            return {"ok": False, "error": f"invalid pid: {pid_s}"}
+    if req.startswith("watch"):
+        parts = req.split()
+        timeout_ms = 20_000
+        since = ""
+        if len(parts) >= 2:
+            try:
+                timeout_ms = max(250, min(60_000, int(parts[1])))
+            except ValueError:
+                timeout_ms = 20_000
+        if len(parts) >= 3:
+            since = parts[2]
+
+        deadline = time.time() + (timeout_ms / 1000.0)
+        while True:
+            status = scanner.scan()
+            fingerprint = _status_fingerprint(status)
+            if fingerprint != since or time.time() >= deadline:
+                return {
+                    "ok": True,
+                    "event": "status_changed" if fingerprint != since else "timeout",
+                    "fingerprint": fingerprint,
+                    "status": status,
+                }
+            time.sleep(0.4)
     return {"ok": False, "error": f"unknown request: {req}"}
+
+
+def _status_fingerprint(status: Dict) -> str:
+    agents = status.get("agents") if isinstance(status, dict) else None
+    if not isinstance(agents, list):
+        agents = []
+
+    slim = []
+    for item in agents:
+        if not isinstance(item, dict):
+            continue
+        slim.append({
+            "pid": item.get("pid"),
+            "activity": item.get("activity"),
+            "latest_message": item.get("latest_message"),
+            "latest_message_at": item.get("latest_message_at"),
+        })
+    slim.sort(key=lambda x: (x.get("pid") or 0))
+    return json.dumps(slim, sort_keys=True, separators=(",", ":"))
 
 
 def handle_client(conn: socket.socket, scanner: Scanner) -> None:
@@ -935,9 +1591,19 @@ def request(req: str) -> Dict:
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(str(SOCKET_PATH))
     s.sendall((req.strip() + "\n").encode("utf-8"))
-    data = s.recv(65535)
+
+    chunks: List[bytes] = []
+    while True:
+        data = s.recv(65535)
+        if not data:
+            break
+        chunks.append(data)
+        if b"\n" in data:
+            break
+
     s.close()
-    return json.loads(data.decode("utf-8", errors="ignore"))
+    payload = b"".join(chunks).decode("utf-8", errors="ignore").strip()
+    return json.loads(payload)
 
 
 def run_server() -> None:

@@ -12,6 +12,16 @@ enum DaemonClient {
         request("jump \(pid)", as: JumpResponse.self)
     }
 
+    static func sendMessage(pid: Int32, message: String) -> SendMessageResponse? {
+        let sanitized = message.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sanitized.isEmpty else { return nil }
+        return request("send \(pid) \(sanitized)", as: SendMessageResponse.self)
+    }
+
+    static func latest(pid: Int32) -> LatestMessageResponse? {
+        request("latest \(pid)", as: LatestMessageResponse.self)
+    }
+
     private static func request<T: Decodable>(_ command: String, as type: T.Type) -> T? {
         guard let data = send(command: command + "\n") else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)

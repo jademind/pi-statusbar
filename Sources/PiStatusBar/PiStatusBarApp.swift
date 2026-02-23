@@ -26,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct ContentView: View {
     @ObservedObject var monitor: AgentMonitor
+    @State private var replyDrafts: [Int32: String] = [:]
+    @State private var expandedAgentPid: Int32?
+    @State private var expandedFullMessages: [Int32: String] = [:]
 
     private func sourceText(_ source: String) -> String {
         switch source {
@@ -134,6 +137,38 @@ struct ContentView: View {
         contextMood(agent).color
     }
 
+    private func latestMessageText(_ agent: AgentState) -> String {
+        if let msg = agent.latestMessageFull?.trimmingCharacters(in: .whitespacesAndNewlines), !msg.isEmpty {
+            return msg
+        }
+        if let msg = agent.latestMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !msg.isEmpty {
+            return msg
+        }
+        return "(no assistant message available yet)"
+    }
+
+    private func latestMessageGist(_ agent: AgentState) -> String {
+        if let gist = agent.latestMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !gist.isEmpty {
+            return gist
+        }
+        let full = latestMessageText(agent)
+        let compact = full.replacingOccurrences(of: "\n", with: " ")
+        if compact.count <= 420 { return compact }
+        let tail = compact.suffix(417)
+        return "..." + tail
+    }
+
+    private func expandedMessageText(_ agent: AgentState) -> String {
+        if let cached = expandedFullMessages[agent.pid]?.trimmingCharacters(in: .whitespacesAndNewlines), !cached.isEmpty {
+            return cached
+        }
+        return latestMessageText(agent)
+    }
+
+    private func isExpanded(_ agent: AgentState) -> Bool {
+        expandedAgentPid == agent.pid
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -175,51 +210,108 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(monitor.agents) { agent in
-                    Button {
-                        monitor.jump(to: agent)
-                    } label: {
-                        HStack(alignment: .top, spacing: 8) {
-                            Circle()
-                                .fill(agent.activity.color)
-                                .frame(width: 8, height: 8)
-                                .padding(.top, 4)
+                    let expanded = isExpanded(agent)
 
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(agentPrimaryLine(agent))
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-
-                                Text(agent.cwd ?? "(no cwd)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-
-                                Text("PID \(agent.pid) · \(windowStatusText(agent))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-
-                                Text(modelMetricsLine(agent))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-
-                                if let context = contextStatusText(agent) {
-                                    Text(context)
-                                        .font(.caption2)
-                                        .foregroundStyle(contextStatusColor(agent))
-                                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                expandedAgentPid = expanded ? nil : agent.pid
+                            }
+                            if !expanded {
+                                if let full = monitor.latestFullMessage(for: agent) {
+                                    expandedFullMessages[agent.pid] = full
                                 }
                             }
+                        } label: {
+                            HStack(alignment: .top, spacing: 8) {
+                                Circle()
+                                    .fill(agent.activity.color)
+                                    .frame(width: 8, height: 8)
+                                    .padding(.top, 4)
 
-                            Spacer()
-                            Text("Jump")
-                                .font(.caption)
-                                .foregroundStyle(.blue)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(agentPrimaryLine(agent))
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+
+                                    if let cwd = agent.cwd {
+                                        Text(cwd)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+
+                                    Text("PID \(agent.pid) · \(windowStatusText(agent))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+
+                                    Text(modelMetricsLine(agent))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+
+                                    if let context = contextStatusText(agent) {
+                                        Text(context)
+                                            .font(.caption2)
+                                            .foregroundStyle(contextStatusColor(agent))
+                                            .lineLimit(1)
+                                    }
+
+                                    Text("Latest: \(latestMessageGist(agent))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(3)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                Spacer(minLength: 6)
+
+                                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+
+                        if expanded {
+                            ScrollView(.vertical) {
+                                Text(expandedMessageText(agent))
+                                    .font(.body)
+                                    .lineSpacing(2)
+                                    .foregroundStyle(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(maxHeight: 360)
+
+                            HStack(spacing: 6) {
+                                TextField("Reply to agent", text: Binding(
+                                    get: { replyDrafts[agent.pid, default: ""] },
+                                    set: { replyDrafts[agent.pid] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+
+                                Button("Send") {
+                                    let current = replyDrafts[agent.pid, default: ""]
+                                    if monitor.send(message: current, to: agent) {
+                                        replyDrafts[agent.pid] = ""
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(replyDrafts[agent.pid, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                                Button("Jump") {
+                                    monitor.jump(to: agent)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+
+                        Divider()
                     }
-                    .buttonStyle(.plain)
                 }
             }
 

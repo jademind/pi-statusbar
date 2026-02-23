@@ -66,4 +66,39 @@ final class AgentMonitor: ObservableObject {
             lastMessage = "No matching open shell found for PID \(agent.pid)"
         }
     }
+
+    func send(message: String, to agent: AgentState) -> Bool {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            lastMessage = "Message is empty"
+            return false
+        }
+
+        guard let response = DaemonClient.sendMessage(pid: agent.pid, message: text) else {
+            lastMessage = "Could not send message to PID \(agent.pid)"
+            return false
+        }
+
+        guard response.ok else {
+            lastMessage = response.error ?? "Could not send message to PID \(agent.pid)"
+            return false
+        }
+
+        let delivery = response.delivery ?? "unknown"
+        lastMessage = "Sent message to PID \(agent.pid) via \(delivery)"
+        return true
+    }
+
+    func latestFullMessage(for agent: AgentState) -> String? {
+        guard let response = DaemonClient.latest(pid: agent.pid), response.ok else {
+            return nil
+        }
+        if let full = response.latestMessageFull?.trimmingCharacters(in: .whitespacesAndNewlines), !full.isEmpty {
+            return full
+        }
+        if let gist = response.latestMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !gist.isEmpty {
+            return gist
+        }
+        return nil
+    }
 }
