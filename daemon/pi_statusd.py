@@ -284,17 +284,14 @@ class Scanner:
         return "unknown"
 
     def latest_message(self, pid: int) -> Dict:
-        status = self.scan()
-        items = status.get("agents") if isinstance(status, dict) else []
-        if not isinstance(items, list):
-            items = []
-
-        item = next((a for a in items if isinstance(a, dict) and int(a.get("pid") or 0) == pid), None)
-        if not item:
+        rows = self._ps_rows()
+        by_pid = {r["pid"]: r for r in rows}
+        row = next((r for r in rows if r.get("pid") == pid and r.get("comm") == "pi"), None)
+        if not row:
             return {"ok": False, "error": f"pi pid not found: {pid}"}
 
-        session_file = item.get("session_file")
-        latest_at = item.get("latest_message_at")
+        session_file: str | None = None
+        latest_at: int | None = None
         latest_full: str | None = None
 
         telemetry_instances = self._read_pi_telemetry_instances()
@@ -304,25 +301,28 @@ class Scanner:
                 continue
             if self._to_int(proc.get("pid"), default=0) != pid:
                 continue
+
+            session = inst.get("session") if isinstance(inst, dict) else None
+            if isinstance(session, dict):
+                sf = str(session.get("file") or "").strip()
+                session_file = sf or None
+
             msgs = inst.get("messages")
             if isinstance(msgs, dict):
                 t = self._clean_message_text(str(msgs.get("lastAssistantText") or ""))
                 if t:
                     latest_full = t
-                    latest_at = self._extract_timestamp_ms(msgs) or latest_at
+                latest_at = self._extract_timestamp_ms(msgs)
             break
 
         if not latest_full and session_file:
-            latest_full, ts = self._latest_assistant_message(str(session_file))
+            latest_full, ts = self._latest_assistant_message(session_file)
             if ts is not None:
                 latest_at = ts
 
         if not latest_full:
-            rows = self._ps_rows()
-            by_pid = {r["pid"]: r for r in rows}
-            row = by_pid.get(pid, {})
             tty = row.get("tty") or "??"
-            mux, mux_session = self._infer_mux(row, by_pid) if row else (None, None)
+            mux, mux_session = self._infer_mux(row, by_pid)
             latest_full = self._latest_runtime_preview(pid, mux, mux_session, tty)
 
         latest_gist = self._message_gist(latest_full)
