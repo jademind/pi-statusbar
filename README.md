@@ -242,7 +242,7 @@ Terminal preference config:
 
 ## Homebrew installation
 
-A Homebrew formula is provided at `Formula/pi-statusbar.rb` (HEAD build).
+A Homebrew formula is provided at `Formula/pi-statusbar.rb` (currently HEAD-capable).
 
 ### Install from local checkout
 
@@ -268,6 +268,28 @@ Or use:
 ```bash
 statusd-service start
 statusd-service status
+```
+
+### Publish for other users (Homebrew tap)
+
+To let anyone install with `brew install`, publish a dedicated tap repo:
+
+1. Create repository: **`jademind/homebrew-tap`**
+2. Add formula at: `Formula/pi-statusbar.rb`
+3. Use stable `url` + `sha256` (recommended) for a tagged release tarball
+4. Commit and push
+
+Then users install with:
+
+```bash
+brew tap jademind/tap
+brew install jademind/tap/pi-statusbar
+```
+
+If only `head` is defined in the formula, users install with:
+
+```bash
+brew install --HEAD jademind/tap/pi-statusbar
 ```
 
 ---
