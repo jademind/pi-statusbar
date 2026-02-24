@@ -307,7 +307,7 @@ Commands:
   status                  Show process + socket health
   ping                    Check daemon socket health only
   latest <pid>            Show latest assistant message for pid (telemetry-backed)
-  send <pid> <msg>        Send message to pid via mux/tty injection
+  send <pid> <msg>        Send message to pid (mux first, then pi-bridge, then tty/ui fallback)
   watch [ms] [fp]         Wait for status/message change and return event JSON
   terminal                Show configured default terminal (auto/Ghostty/iTerm2/Terminal)
   terminal <value>        Set terminal: auto | Ghostty | iTerm2 | Terminal

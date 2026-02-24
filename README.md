@@ -89,7 +89,7 @@ If telemetry is active, the app should show `source: telemetry`.
 - Supports **Jump** to the correct terminal window/session
 - Provides a dedicated **detail panel** for the selected agent with:
   - rich HTML/Markdown rendering of the latest assistant output
-  - `Reply` text field + `Send` action
+  - `Reply` text field (`Enter` sends immediately) + `Send` action
   - `Jump`, `Refresh`, and `Collapse` controls
 - Falls back gracefully when telemetry is unavailable
 
@@ -118,7 +118,7 @@ The detail panel now renders telemetry HTML in a sandboxed WebView with improved
   - `ping`
   - `jump <pid>`
   - `latest <pid>`
-  - `send <pid> <message>`
+  - `send <pid> <message>` (delivery order: zellij/tmux → pi-bridge → tty/ui fallback)
   - `watch [timeout_ms] [fingerprint]`
 
 ### Optional HTTP bridge (for iOS / remote clients)

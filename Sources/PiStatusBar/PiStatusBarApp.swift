@@ -178,18 +178,6 @@ struct ContentView: View {
         return nil
     }
 
-    private func htmlAttributedString(_ html: String) -> AttributedString? {
-        guard let data = html.data(using: .utf8) else { return nil }
-        let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
-            .documentType: NSAttributedString.DocumentType.html,
-            .characterEncoding: String.Encoding.utf8.rawValue,
-        ]
-        guard let ns = try? NSAttributedString(data: data, options: options, documentAttributes: nil), !ns.string.isEmpty else {
-            return nil
-        }
-        return try? AttributedString(ns, including: \.appKit)
-    }
-
     private func htmlStrippedText(_ html: String) -> String {
         let source = html.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: .regularExpression)
         guard let data = source.data(using: .utf8),
@@ -257,13 +245,6 @@ struct ContentView: View {
         let gist = latestMessageGist(agent).trimmingCharacters(in: .whitespacesAndNewlines)
         if !gist.isEmpty { return normalizeMojibake(gist) }
         return "(no assistant message available yet)"
-    }
-
-    private func detailHtmlAttributed(_ agent: AgentState) -> AttributedString? {
-        guard let html = selectedMessageHtml(agent)?.trimmingCharacters(in: .whitespacesAndNewlines), !html.isEmpty else {
-            return nil
-        }
-        return htmlAttributedString(html)
     }
 
     private func sanitizeHtmlForWebView(_ html: String) -> String {
@@ -592,6 +573,14 @@ struct ContentView: View {
         }
     }
 
+    private func sendReply(for agent: AgentState) {
+        let current = replyDrafts[agent.pid, default: ""]
+        if monitor.send(message: current, to: agent) {
+            replyDrafts[agent.pid] = ""
+            refreshLatest(for: agent)
+        }
+    }
+
     @ViewBuilder
     private func agentDetail(_ agent: AgentState) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -650,13 +639,13 @@ struct ContentView: View {
                     set: { replyDrafts[agent.pid] = $0 }
                 ))
                 .textFieldStyle(.roundedBorder)
+                .submitLabel(.send)
+                .onSubmit {
+                    sendReply(for: agent)
+                }
 
                 Button("Send") {
-                    let current = replyDrafts[agent.pid, default: ""]
-                    if monitor.send(message: current, to: agent) {
-                        replyDrafts[agent.pid] = ""
-                        refreshLatest(for: agent)
-                    }
+                    sendReply(for: agent)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(replyDrafts[agent.pid, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

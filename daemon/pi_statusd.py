@@ -12,6 +12,9 @@ import time
 import tempfile
 import pwd
 import unicodedata
+import fcntl
+import termios
+import uuid
 from datetime import datetime
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -54,6 +57,9 @@ class Agent:
     latest_message_full: str | None = None
     latest_message_html: str | None = None
     latest_message_at: int | None = None
+    extension_pi_telemetry: bool | None = None
+    extension_pi_bridge: bool | None = None
+    bridge_available: bool | None = None
 
 
 class Scanner:
@@ -103,6 +109,7 @@ class Scanner:
             client_pid = self._find_mux_client_pid(mux, mux_session, row["tty"], rows)
             terminal_app, _ = self._detect_terminal_target_for_pid(client_pid or row["pid"], by_pid)
             attached_window = client_pid is not None or (terminal_app is not None and row.get("tty") != "??")
+            bridge_registry = self._bridge_registry_for_pid(row["pid"])
             agents.append(
                 Agent(
                     pid=row["pid"],
@@ -122,6 +129,9 @@ class Scanner:
                     latest_message=latest_message,
                     latest_message_full=None,
                     latest_message_html=None,
+                    extension_pi_telemetry=False,
+                    extension_pi_bridge=bridge_registry is not None,
+                    bridge_available=bridge_registry is not None,
                 )
             )
         return agents
@@ -178,6 +188,12 @@ class Scanner:
             terminal_app, _ = self._detect_terminal_target_for_pid(client_pid or pid, by_pid)
             attached_window = client_pid is not None or (terminal_app is not None and tty != "??")
 
+            extensions_info = instance.get("extensions") if isinstance(instance.get("extensions"), dict) else {}
+            bridge_ext = extensions_info.get("bridge") if isinstance(extensions_info.get("bridge"), dict) else {}
+            bridge_active = bridge_ext.get("active") if isinstance(bridge_ext.get("active"), bool) else None
+            bridge_registry = self._bridge_registry_for_pid(pid)
+            bridge_available = bool(bridge_active) or bridge_registry is not None
+
             agents.append(
                 Agent(
                     pid=pid,
@@ -211,6 +227,9 @@ class Scanner:
                     latest_message_full=latest_message_full,
                     latest_message_html=latest_message_html,
                     latest_message_at=latest_message_at,
+                    extension_pi_telemetry=True,
+                    extension_pi_bridge=bridge_active if isinstance(bridge_active, bool) else (bridge_registry is not None),
+                    bridge_available=bridge_available,
                 )
             )
 
@@ -272,6 +291,249 @@ class Scanner:
             pass
 
         return []
+
+    def _telemetry_instance_for_pid(self, pid: int) -> Dict | None:
+        for inst in self._read_pi_telemetry_instances():
+            if not isinstance(inst, dict):
+                continue
+            process = inst.get("process")
+            if not isinstance(process, dict):
+                continue
+            if self._to_int(process.get("pid"), default=0) == pid:
+                return inst
+        return None
+
+    def _bridge_base_dir(self) -> Path:
+        configured = os.environ.get("PI_BRIDGE_DIR", "").strip()
+        if configured:
+            return Path(configured)
+        return Path.home() / ".pi" / "agent" / "statusbridge"
+
+    def _bridge_registry_for_pid(self, pid: int) -> Dict | None:
+        registry_file = self._bridge_base_dir() / "registry" / f"{pid}.json"
+        if not registry_file.exists() or not registry_file.is_file():
+            return None
+        try:
+            payload = json.loads(registry_file.read_text())
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if self._to_int(payload.get("pid"), default=0) != pid:
+            return None
+
+        updated_at = self._to_int(payload.get("updatedAt"), default=0) or 0
+        stale_ms = self._to_int(os.environ.get("PI_BRIDGE_REGISTRY_STALE_MS"), default=10_000) or 10_000
+        if updated_at <= 0:
+            return None
+        if int(time.time() * 1000) - updated_at > max(1000, stale_ms):
+            return None
+        try:
+            os.kill(pid, 0)
+        except Exception:
+            return None
+        return payload
+
+    def _send_via_bridge(self, pid: int, text: str, mode: str = "queued") -> Dict | None:
+        registry = self._bridge_registry_for_pid(pid)
+        if not registry:
+            return None
+
+        base_dir = self._bridge_base_dir()
+        inbox_dir = base_dir / "inbox" / str(pid)
+        ack_dir = base_dir / "acks" / str(pid)
+        try:
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            ack_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            return {
+                "ok": False,
+                "pid": pid,
+                "delivery": "pi-bridge",
+                "error": f"bridge directory error: {e}",
+            }
+
+        now_ms = int(time.time() * 1000)
+        expires_ms = now_ms + 60_000
+        msg_id = str(uuid.uuid4())
+        envelope = {
+            "v": 1,
+            "id": msg_id,
+            "pid": pid,
+            "text": text,
+            "source": "statusbar",
+            "createdAt": datetime.utcfromtimestamp(now_ms / 1000.0).isoformat(timespec="milliseconds") + "Z",
+            "expiresAt": datetime.utcfromtimestamp(expires_ms / 1000.0).isoformat(timespec="milliseconds") + "Z",
+            "delivery": {
+                "mode": "interrupt" if mode == "interrupt" else "queued",
+            },
+            "meta": {
+                "requestId": f"statusd-{msg_id}",
+            },
+        }
+
+        inbox_file = inbox_dir / f"{msg_id}.json"
+        tmp_file = inbox_dir / f".{msg_id}.tmp"
+        ack_file = ack_dir / f"{msg_id}.json"
+
+        try:
+            tmp_file.write_text(json.dumps(envelope))
+            os.replace(tmp_file, inbox_file)
+        except Exception as e:
+            try:
+                if tmp_file.exists():
+                    tmp_file.unlink()
+            except Exception:
+                pass
+            return {
+                "ok": False,
+                "pid": pid,
+                "delivery": "pi-bridge",
+                "error": f"bridge enqueue failed: {e}",
+            }
+
+        timeout_ms = self._to_int(os.environ.get("PI_BRIDGE_ACK_TIMEOUT_MS"), default=2200) or 2200
+        deadline = time.time() + max(0.2, timeout_ms / 1000.0)
+        while time.time() < deadline:
+            if ack_file.exists():
+                try:
+                    ack = json.loads(ack_file.read_text())
+                except Exception:
+                    ack = {"status": "failed", "error": "invalid_ack"}
+                status = str((ack or {}).get("status") or "failed")
+                if status == "delivered":
+                    return {
+                        "ok": True,
+                        "pid": pid,
+                        "delivery": "pi-bridge",
+                        "bridge_mode": (ack or {}).get("resolvedMode") or envelope["delivery"]["mode"],
+                        "bridge_ack": status,
+                    }
+                return {
+                    "ok": False,
+                    "pid": pid,
+                    "delivery": "pi-bridge",
+                    "error": f"bridge ack: {status}",
+                    "bridge_mode": (ack or {}).get("resolvedMode") or envelope["delivery"]["mode"],
+                    "bridge_ack": status,
+                    "bridge_error": (ack or {}).get("error"),
+                }
+            time.sleep(0.05)
+
+        return {
+            "ok": False,
+            "pid": pid,
+            "delivery": "pi-bridge",
+            "error": "bridge ack timeout",
+            "bridge_mode": envelope["delivery"]["mode"],
+        }
+
+    def _tmux_target_for_tty(self, tty: str | None) -> str | None:
+        if not tty or tty == "??":
+            return None
+        tty_path = tty if tty.startswith("/dev/") else f"/dev/{tty}"
+        try:
+            proc = subprocess.run(
+                ["tmux", "list-panes", "-a", "-F", "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"],
+                capture_output=True,
+                text=True,
+                timeout=1.2,
+            )
+            if proc.returncode != 0:
+                return None
+            for raw in proc.stdout.splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                parts = line.split(" ", 1)
+                if len(parts) != 2:
+                    continue
+                pane_tty, target = parts
+                if pane_tty == tty_path:
+                    return target.strip() or None
+        except Exception:
+            return None
+        return None
+
+    def _send_tmux_message(self, text: str, mux_session: str | None, tmux_target: str | None) -> bool:
+        attempts: List[List[str]] = []
+
+        # Best target: telemetry/tty-resolved pane target (session:window.pane).
+        if tmux_target:
+            attempts.append(["tmux", "send-keys", "-t", tmux_target, text, "C-m"])
+
+        # Session-targeted send (works for regular tmux session names).
+        if mux_session:
+            attempts.append(["tmux", "send-keys", "-t", mux_session, text, "C-m"])
+            # Compatibility fallback when mux_session is actually a socket label.
+            attempts.append(["tmux", "-L", mux_session, "send-keys", text, "C-m"])
+
+        # Final fallback: current client session.
+        attempts.append(["tmux", "send-keys", text, "C-m"])
+
+        for cmd in attempts:
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.2)
+                if proc.returncode == 0:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _inject_tty_input(self, tty: str, text: str) -> bool:
+        tty_path = tty if tty.startswith("/dev/") else f"/dev/{tty}"
+        payload = text + "\n"
+        fd = -1
+        try:
+            fd = os.open(tty_path, os.O_RDWR | os.O_NOCTTY)
+            for ch in payload:
+                fcntl.ioctl(fd, termios.TIOCSTI, ch.encode("utf-8", errors="ignore"))
+            return True
+        except Exception:
+            return False
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+
+    def _send_via_ui_typing(
+        self,
+        text: str,
+        app_name: str | None,
+        hints: List[str],
+        app_pid: int | None = None,
+        tty: str | None = None,
+    ) -> bool:
+        if not app_name:
+            return False
+
+        focused = False
+        if tty and app_name in ("iTerm2", "Terminal"):
+            focused = self._focus_terminal_by_tty(tty)
+
+        if not focused:
+            focused = self._focus_terminal_app(app_name, hints, app_pid)
+        if not focused and app_name == "Ghostty":
+            focused = self._focus_ghostty_window_by_hints_any(hints)
+        if not focused:
+            focused = self._activate_app(app_name)
+        if not focused:
+            return False
+
+        escaped = self._applescript_escape(text)
+        script = f'''
+try
+  tell application "System Events"
+    keystroke "{escaped}"
+    key code 36
+    return "ok"
+  end tell
+end try
+return "no"
+'''
+        return self._run_osascript(script) == "ok"
 
     def _map_telemetry_activity(self, state_info: Dict | object) -> str:
         if isinstance(state_info, dict):
@@ -373,6 +635,16 @@ class Scanner:
         tty = row.get("tty")
         mux, mux_session = self._infer_mux(row, by_pid)
 
+        telemetry = self._telemetry_instance_for_pid(pid)
+        routing = telemetry.get("routing") if isinstance(telemetry, dict) else None
+        if isinstance(routing, dict):
+            rmux = routing.get("mux")
+            rsession = routing.get("muxSession")
+            if isinstance(rmux, str) and rmux in ("zellij", "tmux", "screen"):
+                mux = rmux
+            if isinstance(rsession, str) and rsession.strip():
+                mux_session = rsession.strip()
+
         # Prefer deterministic mux injection.
         if mux == "zellij" and mux_session:
             try:
@@ -393,37 +665,71 @@ class Scanner:
             except Exception:
                 pass
 
-        if mux == "tmux" and mux_session:
-            try:
-                proc = subprocess.run(
-                    ["tmux", "-L", mux_session, "send-keys", text, "Enter"],
-                    capture_output=True,
-                    text=True,
-                    timeout=1.2,
-                )
-                if proc.returncode == 0:
-                    return {"ok": True, "pid": pid, "delivery": "tmux", "mux_session": mux_session}
-            except Exception:
-                pass
+        if mux == "tmux":
+            tmux_target = None
+            if isinstance(routing, dict):
+                tmux_info = routing.get("tmux")
+                if isinstance(tmux_info, dict):
+                    pane_target = tmux_info.get("paneTarget")
+                    if isinstance(pane_target, str) and pane_target.strip():
+                        tmux_target = pane_target.strip()
+            if not tmux_target:
+                tmux_target = self._tmux_target_for_tty(tty)
 
-        # Last-resort TTY injection.
-        if tty and tty != "??":
-            tty_path = f"/dev/{tty}"
-            try:
-                with open(tty_path, "w", encoding="utf-8", errors="ignore") as f:
-                    f.write(text)
-                    f.write("\n")
-                return {"ok": True, "pid": pid, "delivery": "tty", "tty": tty}
-            except Exception:
-                pass
+            delivered = self._send_tmux_message(text, mux_session, tmux_target)
+            if delivered:
+                return {
+                    "ok": True,
+                    "pid": pid,
+                    "delivery": "tmux",
+                    "mux_session": mux_session,
+                    "tmux_target": tmux_target,
+                }
+
+        bridge_result = self._send_via_bridge(pid, text, mode="queued")
+        if bridge_result is not None:
+            if bridge_result.get("ok"):
+                return bridge_result
+            # Bridge was available but rejected/failed this message; avoid duplicate fallback injection.
+            return bridge_result
+
+        # For zellij/screen, avoid raw TTY injection if mux routing exists but delivery failed.
+        if mux in ("zellij", "screen"):
+            return {
+                "ok": False,
+                "error": "could not deliver message via mux",
+                "pid": pid,
+                "mux": mux,
+                "mux_session": mux_session,
+                "tty": tty,
+            }
+
+        cwd = row.get("cwd")
+        terminal_app, terminal_pid = self._detect_terminal_target_for_pid(pid, by_pid)
+        hints = self._build_focus_hints(mux_session, cwd, tty)
+
+        # Last-resort for direct shell/tmux fallback: inject into tty input queue.
+        if tty and tty != "??" and self._inject_tty_input(tty, text):
+            return {"ok": True, "pid": pid, "delivery": "tty-input", "tty": tty}
+
+        # If kernel tty injection is blocked, try UI typing on the matched terminal window.
+        if self._send_via_ui_typing(text, terminal_app, hints, terminal_pid, tty):
+            return {
+                "ok": True,
+                "pid": pid,
+                "delivery": "ui-keystroke",
+                "tty": tty,
+                "terminal_app": terminal_app,
+            }
 
         return {
             "ok": False,
-            "error": "could not deliver message (no reachable mux client or tty)",
+            "error": "could not deliver message (mux, tty-input and ui-keystroke all failed)",
             "pid": pid,
             "mux": mux,
             "mux_session": mux_session,
             "tty": tty,
+            "terminal_app": terminal_app,
         }
 
     def _latest_assistant_message(self, session_file: str | None) -> tuple[str | None, int | None]:
@@ -1076,8 +1382,14 @@ class Scanner:
     def _extract_tmux_session(self, args: str) -> str | None:
         parts = args.split()
         for i, p in enumerate(parts):
-            if p in ("-L", "-S") and i + 1 < len(parts):
-                return parts[i + 1]
+            if p in ("-t", "--target") and i + 1 < len(parts):
+                target = parts[i + 1].strip()
+                if target:
+                    return target.split(":", 1)[0]
+            if p.startswith("-t") and len(p) > 2:
+                target = p[2:].strip()
+                if target:
+                    return target.split(":", 1)[0]
         return None
 
     def _find_mux_client_pid(self, mux: str | None, mux_session: str | None, tty: str | None, rows: List[Dict]) -> int | None:
