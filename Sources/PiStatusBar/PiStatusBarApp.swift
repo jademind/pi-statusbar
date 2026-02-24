@@ -26,12 +26,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct ContentView: View {
+    private struct SendFeedback {
+        let message: String
+        let color: Color
+        let symbol: String
+        let spinning: Bool
+    }
+
     @ObservedObject var monitor: AgentMonitor
     @State private var replyDrafts: [Int32: String] = [:]
     @State private var selectedAgentPid: Int32?
     @State private var latestFullMessages: [Int32: String] = [:]
     @State private var latestHtmlMessages: [Int32: String] = [:]
     @State private var selectedLatestAt: Int?
+    @State private var sendFeedback: SendFeedback?
+    @State private var feedbackHideWorkItem: DispatchWorkItem?
+    @State private var pendingWorkPids: Set<Int32> = []
 
     private func sourceText(_ source: String) -> String {
         switch source {
@@ -458,6 +468,10 @@ struct ContentView: View {
         selectedAgentPid == agent.pid
     }
 
+    private func showWorkingOverlay(for agent: AgentState) -> Bool {
+        pendingWorkPids.contains(agent.pid) && agent.activity == .running
+    }
+
     private func refreshLatest(for agent: AgentState) {
         guard let latest = monitor.latestMessageResponse(for: agent) else { return }
         if let full = latest.latestMessageFull?.trimmingCharacters(in: .whitespacesAndNewlines), !full.isEmpty {
@@ -489,6 +503,10 @@ struct ContentView: View {
 
     private func syncSelectedAgentFromStatus() {
         guard let agent = selectedAgent else { return }
+
+        if agent.activity != .running {
+            pendingWorkPids.remove(agent.pid)
+        }
 
         if let full = agent.latestMessageFull?.trimmingCharacters(in: .whitespacesAndNewlines), !full.isEmpty {
             latestFullMessages[agent.pid] = full
@@ -573,11 +591,46 @@ struct ContentView: View {
         }
     }
 
+    private func setSendFeedback(_ feedback: SendFeedback?, autoHideAfter seconds: TimeInterval? = nil) {
+        feedbackHideWorkItem?.cancel()
+        feedbackHideWorkItem = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            sendFeedback = feedback
+        }
+        guard let seconds else { return }
+        let work = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                sendFeedback = nil
+            }
+        }
+        feedbackHideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
     private func sendReply(for agent: AgentState) {
         let current = replyDrafts[agent.pid, default: ""]
-        if monitor.send(message: current, to: agent) {
-            replyDrafts[agent.pid] = ""
-            refreshLatest(for: agent)
+        setSendFeedback(
+            SendFeedback(message: "Sending…", color: .blue, symbol: "paperplane", spinning: true)
+        )
+
+        DispatchQueue.main.async {
+            if monitor.send(message: current, to: agent) {
+                pendingWorkPids.insert(agent.pid)
+                replyDrafts[agent.pid] = ""
+                refreshLatest(for: agent)
+                setSendFeedback(
+                    SendFeedback(message: "Message sent", color: .green, symbol: "checkmark.circle.fill", spinning: false),
+                    autoHideAfter: 1.4
+                )
+                return
+            }
+
+            pendingWorkPids.remove(agent.pid)
+            let error = monitor.lastMessage ?? "Send failed"
+            setSendFeedback(
+                SendFeedback(message: error, color: .red, symbol: "exclamationmark.triangle.fill", spinning: false),
+                autoHideAfter: 2.4
+            )
         }
     }
 
@@ -607,30 +660,51 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            if let html = selectedMessageHtml(agent)?.trimmingCharacters(in: .whitespacesAndNewlines), !html.isEmpty {
-                SafeHTMLView(html: wrappedHtmlDocument(html))
-                    .frame(minHeight: 170, maxHeight: 380, alignment: .top)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                ScrollView(.vertical) {
-                    let text = detailMessageText(agent)
-                    if let markdown = markdownAttributedString(text) {
-                        Text(markdown)
-                            .font(.body)
-                            .foregroundStyle(.primary)
-                            .tint(.blue)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    } else {
-                        Text(text)
-                            .font(.body)
-                            .lineSpacing(3)
-                            .foregroundStyle(.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+            let working = showWorkingOverlay(for: agent)
+            Group {
+                if let html = selectedMessageHtml(agent)?.trimmingCharacters(in: .whitespacesAndNewlines), !html.isEmpty {
+                    SafeHTMLView(html: wrappedHtmlDocument(html))
+                        .frame(minHeight: 170, maxHeight: 380, alignment: .top)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    ScrollView(.vertical) {
+                        let text = detailMessageText(agent)
+                        if let markdown = markdownAttributedString(text) {
+                            Text(markdown)
+                                .font(.body)
+                                .foregroundStyle(.primary)
+                                .tint(.blue)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        } else {
+                            Text(text)
+                                .font(.body)
+                                .lineSpacing(3)
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
                     }
+                    .frame(minHeight: 170, maxHeight: 380, alignment: .top)
                 }
-                .frame(minHeight: 170, maxHeight: 380, alignment: .top)
+            }
+            .opacity(working ? 0.45 : 1.0)
+            .overlay {
+                if working {
+                    VStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Label("Agent is working…", systemImage: "gearshape.fill")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(.secondary.opacity(0.25), lineWidth: 1)
+                    )
+                }
             }
 
             HStack(spacing: 6) {
@@ -742,14 +816,43 @@ struct ContentView: View {
             }
         }
         .padding(12)
+        .overlay(alignment: .top) {
+            if let feedback = sendFeedback {
+                HStack(spacing: 8) {
+                    if feedback.spinning {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: feedback.symbol)
+                    }
+                    Text(feedback.message)
+                        .lineLimit(2)
+                }
+                .font(.caption)
+                .foregroundStyle(feedback.color)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(
+                    Capsule().stroke(feedback.color.opacity(0.35), lineWidth: 1)
+                )
+                .padding(.top, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .onAppear { monitor.start() }
         .onChange(of: monitor.agents, initial: false) { _, agents in
+            pendingWorkPids.formIntersection(Set(agents.map(\.pid)))
             if let selected = selectedAgentPid, !agents.contains(where: { $0.pid == selected }) {
                 selectedAgentPid = nil
                 selectedLatestAt = nil
                 return
             }
             syncSelectedAgentFromStatus()
+        }
+        .onDisappear {
+            feedbackHideWorkItem?.cancel()
+            feedbackHideWorkItem = nil
         }
     }
 }
