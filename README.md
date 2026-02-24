@@ -252,9 +252,10 @@ brew install --HEAD ./Formula/pi-statusbar.rb
 
 This installs:
 
-- `PiStatusBar` (menu bar app binary)
+- `PiStatusBar` (menu bar app launcher)
 - `statusdctl` (daemon control)
-- `statusd-service` (LaunchAgent management)
+- `statusd-service` (daemon LaunchAgent management)
+- `statusbar-app-service` (menu bar app LaunchAgent management)
 
 ### Start daemon via brew service (optional)
 
@@ -268,6 +269,19 @@ Or use:
 ```bash
 statusd-service start
 statusd-service status
+```
+
+### Autostart menu bar app (optional)
+
+```bash
+statusbar-app-service start
+statusbar-app-service status
+```
+
+To disable app autostart:
+
+```bash
+statusbar-app-service uninstall
 ```
 
 ### Publish for other users (Homebrew tap)
@@ -353,6 +367,15 @@ swift build
 - `restart`
 - `status`
 - `doctor`
+
+`daemon/statusbar-app-service` supports:
+
+- `install`
+- `start`
+- `stop`
+- `restart`
+- `status`
+- `uninstall`
 
 ---
 

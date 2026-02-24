@@ -9,21 +9,25 @@ class PiStatusbar < Formula
 
   depends_on :macos
   depends_on "python@3.12"
-  depends_on "swift" => :build
+  depends_on "swift"
 
   def install
-    system "swift", "build", "-c", "release"
-
     libexec.install Dir["*"]
 
-    bin.install ".build/release/PiStatusBar"
+    (bin/"PiStatusBar").write <<~EOS
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec swift run --package-path "#{opt_libexec}" PiStatusBar "$@"
+    EOS
+
     (bin/"statusdctl").write_env_script libexec/"daemon/statusdctl", PI_STATUSBAR_ROOT: libexec
     (bin/"statusd-service").write_env_script libexec/"daemon/statusd-service", PI_STATUSBAR_ROOT: libexec
+    (bin/"statusbar-app-service").write_env_script libexec/"daemon/statusbar-app-service", PI_STATUSBAR_ROOT: libexec
   end
 
   service do
     run [
-      Formula["python@3.12"].opt_bin/"python3",
+      Formula["python@3.12"].opt_bin/"python3.12",
       opt_libexec/"daemon/pi_statusd.py"
     ]
     keep_alive true
