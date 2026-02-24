@@ -41,6 +41,7 @@ swift build
 
 ```bash
 daemon/statusdctl restart
+daemon/statusdctl ensure
 daemon/statusdctl status
 daemon/statusdctl ping
 ```
@@ -68,6 +69,30 @@ Then, in an active Pi session:
 ```
 
 If telemetry is active, the app should show `source: telemetry`.
+
+### Managed startup (recommended)
+
+Use the LaunchAgent management script for clean startup/login behavior:
+
+```bash
+daemon/statusd-service install
+daemon/statusd-service start
+daemon/statusd-service status
+```
+
+It verifies:
+
+- plist is registered (`~/Library/LaunchAgents/dev.jademind.pi-statusd.plist`)
+- service is loaded in `launchd`
+- daemon socket health is OK
+
+Useful commands:
+
+```bash
+daemon/statusd-service restart
+daemon/statusd-service doctor
+daemon/statusd-service uninstall
+```
 
 ---
 
@@ -215,6 +240,38 @@ Terminal preference config:
 
 ---
 
+## Homebrew installation
+
+A Homebrew formula is provided at `Formula/pi-statusbar.rb` (HEAD build).
+
+### Install from local checkout
+
+```bash
+brew install --HEAD ./Formula/pi-statusbar.rb
+```
+
+This installs:
+
+- `PiStatusBar` (menu bar app binary)
+- `statusdctl` (daemon control)
+- `statusd-service` (LaunchAgent management)
+
+### Start daemon via brew service (optional)
+
+```bash
+brew services start pi-statusbar
+brew services list | rg pi-statusbar
+```
+
+Or use:
+
+```bash
+statusd-service start
+statusd-service status
+```
+
+---
+
 ## Build and run
 
 ### Start / restart daemon
@@ -251,6 +308,7 @@ swift build
 - `start`
 - `stop`
 - `restart`
+- `ensure`
 - `status`
 - `ping`
 - `latest <pid>`
@@ -263,6 +321,16 @@ swift build
 - `http-restart`
 - `http-status`
 - `http-token [value]`
+
+`daemon/statusd-service` supports:
+
+- `install`
+- `uninstall`
+- `start`
+- `stop`
+- `restart`
+- `status`
+- `doctor`
 
 ---
 

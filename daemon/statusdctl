@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR_DEFAULT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="${PI_STATUSBAR_ROOT:-$ROOT_DIR_DEFAULT}"
+
+if [[ ! -f "$ROOT_DIR/daemon/pi_statusd.py" ]]; then
+  if [[ -f "$SCRIPT_DIR/pi_statusd.py" ]]; then
+    ROOT_DIR="$SCRIPT_DIR/.."
+  elif [[ -f "$SCRIPT_DIR/../libexec/pi-statusbar/daemon/pi_statusd.py" ]]; then
+    ROOT_DIR="$SCRIPT_DIR/../libexec/pi-statusbar"
+  fi
+fi
+
 DAEMON="$ROOT_DIR/daemon/pi_statusd.py"
 HTTP_DAEMON="$ROOT_DIR/daemon/pi_statusd_http.py"
 STATE_DIR="$HOME/.pi/agent"
@@ -15,6 +26,19 @@ HTTP_LOG_FILE="$STATE_DIR/statusd-http.log"
 HTTP_CONFIG_FILE="$STATE_DIR/statusd-http.json"
 
 mkdir -p "$STATE_DIR"
+
+assert_layout() {
+  if [[ ! -f "$DAEMON" ]]; then
+    echo "Could not locate daemon script: $DAEMON"
+    echo "Set PI_STATUSBAR_ROOT to your repo/install root (contains daemon/pi_statusd.py)."
+    exit 1
+  fi
+  if [[ ! -f "$HTTP_DAEMON" ]]; then
+    echo "Could not locate HTTP daemon script: $HTTP_DAEMON"
+    echo "Set PI_STATUSBAR_ROOT to your repo/install root (contains daemon/pi_statusd_http.py)."
+    exit 1
+  fi
+}
 
 is_running() {
   if [[ -f "$PID_FILE" ]]; then
@@ -296,14 +320,29 @@ print("terminal set to:", cfg["terminal"])
 PY
 }
 
+ensure_daemon() {
+  if ! is_running; then
+    start_daemon
+  fi
+
+  if python3 "$DAEMON" --request ping >/dev/null 2>&1; then
+    echo "pi-statusd ready"
+    return 0
+  fi
+
+  echo "pi-statusd started but socket is not ready yet"
+  return 1
+}
+
 show_help() {
   cat <<'EOF'
-Usage: daemon/statusdctl <command>
+Usage: statusdctl <command>
 
 Commands:
   start                   Start pi-statusd in background
   stop                    Stop running pi-statusd
   restart                 Restart pi-statusd
+  ensure                  Ensure pi-statusd is running and socket responds
   status                  Show process + socket health
   ping                    Check daemon socket health only
   latest <pid>            Show latest assistant message for pid (telemetry-backed)
@@ -320,6 +359,8 @@ Commands:
 EOF
 }
 
+assert_layout
+
 cmd="${1:-status}"
 case "$cmd" in
   start)
@@ -335,19 +376,22 @@ case "$cmd" in
   status)
     daemon_status
     ;;
+  ensure)
+    ensure_daemon
+    ;;
   ping)
     python3 "$DAEMON" --request ping
     ;;
   latest)
     if [[ $# -lt 2 ]]; then
-      echo "Usage: daemon/statusdctl latest <pid>"
+      echo "Usage: statusdctl latest <pid>"
       exit 2
     fi
     python3 "$DAEMON" --request "latest $2"
     ;;
   send)
     if [[ $# -lt 3 ]]; then
-      echo "Usage: daemon/statusdctl send <pid> <message>"
+      echo "Usage: statusdctl send <pid> <message>"
       exit 2
     fi
     pid="$2"
