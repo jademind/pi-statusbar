@@ -1,5 +1,7 @@
 # Pi Status (daemon + macOS menu bar UI)
 
+> Legacy document. For current install/service/package guidance (including `@jademind/*` package names), use `README.md`.
+
 This project is now split into two parts:
 
 1. **`pi-statusd` daemon** (source of truth)

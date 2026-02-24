@@ -7,11 +7,11 @@ This repository contains:
 - **`pi-statusd`** (Python daemon): discovers Pi agents, merges telemetry, and handles jump/focus actions.
 - **`PiStatusBar`** (SwiftUI app): menu bar UI that visualizes agent state and context pressure.
 
-> `pi-statusbar` consumes telemetry from the separate [`pi-telemetry`](https://github.com/jademind/pi-telemetry) package.
+> `pi-statusbar` consumes telemetry from the separate [`@jademind/pi-telemetry`](https://github.com/jademind/pi-telemetry) package.
 
 ## Version
 
-Current version: **0.1.2**
+Current version: **0.1.5**
 
 ---
 
@@ -59,7 +59,7 @@ The `π` icon should appear in the macOS menu bar.
 ### 5) (Optional, recommended) Enable telemetry source
 
 ```bash
-pi install npm:pi-telemetry
+pi install npm:@jademind/pi-telemetry
 ```
 
 Then, in an active Pi session:
@@ -215,7 +215,7 @@ Compatibility notes:
 Install telemetry:
 
 ```bash
-pi install npm:pi-telemetry
+pi install npm:@jademind/pi-telemetry
 ```
 
 ---
@@ -409,7 +409,7 @@ If status is unhealthy, inspect `~/.pi/agent/statusd.log`.
 
 ### Source chip stays on `fallback`
 
-- Confirm telemetry is installed: `pi install npm:pi-telemetry`
+- Confirm telemetry is installed: `pi install npm:@jademind/pi-telemetry`
 - In an active Pi session run: `/pi-telemetry --data`
 - Ensure telemetry files exist under `~/.pi/agent/telemetry/instances`
 
@@ -428,6 +428,19 @@ If status is unhealthy, inspect `~/.pi/agent/statusd.log`.
 daemon/statusdctl terminal
 daemon/statusdctl terminal Ghostty
 ```
+
+---
+
+## OSS best practices
+
+- Use scoped packages in docs and scripts: `@jademind/*`.
+- Keep security defaults on (local socket perms, token auth for HTTP bridge, no HTTP jump endpoint).
+- Prefer reproducible release flow:
+  1. tag `pi-statusbar` release
+  2. update `Formula/pi-statusbar.rb` (`url`, `sha256`, `version`)
+  3. update `jademind/homebrew-tap`
+  4. verify `brew install` + `brew services` + `statusbar-app-service status`
+- Include clear migration notes when changing package names, command behavior, or service startup logic.
 
 ---
 
