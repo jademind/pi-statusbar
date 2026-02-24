@@ -203,8 +203,15 @@ daemon_status() {
     pid="$(cat "$PID_FILE")"
     echo "pi-statusd running (pid $pid)"
   else
-    echo "pi-statusd not running"
-    return 1
+    local fallback_pid
+    fallback_pid="$(find_pid_fallback)"
+    if [[ -n "$fallback_pid" ]] && kill -0 "$fallback_pid" 2>/dev/null; then
+      echo "$fallback_pid" > "$PID_FILE"
+      echo "pi-statusd running (pid $fallback_pid)"
+    else
+      echo "pi-statusd not running"
+      return 1
+    fi
   fi
 
   if python3 "$DAEMON" --request ping >/dev/null 2>&1; then

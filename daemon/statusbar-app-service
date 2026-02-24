@@ -165,7 +165,12 @@ status_service() {
     rc=1
   fi
 
-  pgrep -x PiStatusBar >/dev/null 2>&1 && echo "app process: running" || { echo "app process: not running"; rc=1; }
+  if pgrep -x PiStatusBar >/dev/null 2>&1 || pgrep -f "swift.*PiStatusBar" >/dev/null 2>&1; then
+    echo "app process: running"
+  else
+    echo "app process: not running"
+    rc=1
+  fi
   return "$rc"
 }
 

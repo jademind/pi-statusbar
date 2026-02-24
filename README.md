@@ -252,7 +252,7 @@ brew install --HEAD ./Formula/pi-statusbar.rb
 
 This installs:
 
-- `PiStatusBar` (menu bar app launcher)
+- `PiStatusBar` (menu bar app launcher; first run compiles with Swift locally)
 - `statusdctl` (daemon control)
 - `statusd-service` (daemon LaunchAgent management)
 - `statusbar-app-service` (menu bar app LaunchAgent management)
