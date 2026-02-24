@@ -3,11 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="$ROOT_DIR/daemon/pi_statusd.py"
+HTTP_DAEMON="$ROOT_DIR/daemon/pi_statusd_http.py"
 STATE_DIR="$HOME/.pi/agent"
 PID_FILE="$STATE_DIR/statusd.pid"
 LOG_FILE="$STATE_DIR/statusd.log"
 SOCKET_FILE="$STATE_DIR/statusd.sock"
 CONFIG_FILE="$STATE_DIR/statusd.json"
+
+HTTP_PID_FILE="$STATE_DIR/statusd-http.pid"
+HTTP_LOG_FILE="$STATE_DIR/statusd-http.log"
+HTTP_CONFIG_FILE="$STATE_DIR/statusd-http.json"
 
 mkdir -p "$STATE_DIR"
 
@@ -23,11 +28,30 @@ is_running() {
 }
 
 find_pid_fallback() {
-  pgrep -f "python3 .*daemon/pi_statusd.py" | head -n1 || true
+  pgrep -f "daemon/pi_statusd.py" | head -n1 || true
 }
 
 find_all_pids() {
-  pgrep -f "python3 .*daemon/pi_statusd.py" || true
+  pgrep -f "daemon/pi_statusd.py" || true
+}
+
+is_http_running() {
+  if [[ -f "$HTTP_PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$HTTP_PID_FILE" 2>/dev/null || true)"
+    if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+find_http_pid_fallback() {
+  pgrep -f "daemon/pi_statusd_http.py" | head -n1 || true
+}
+
+find_all_http_pids() {
+  pgrep -f "daemon/pi_statusd_http.py" || true
 }
 
 start_daemon() {
@@ -48,7 +72,6 @@ start_daemon() {
   local pid=$!
   echo "$pid" > "$PID_FILE"
 
-  # Give daemon a moment to create socket.
   sleep 0.2
 
   if kill -0 "$pid" 2>/dev/null; then
@@ -91,6 +114,65 @@ stop_daemon() {
   echo "Stopped pi-statusd."
 }
 
+start_http() {
+  if is_http_running; then
+    echo "pi-statusd-http already running (pid $(cat "$HTTP_PID_FILE"))."
+    return 0
+  fi
+
+  local fallback_pid
+  fallback_pid="$(find_http_pid_fallback)"
+  if [[ -n "$fallback_pid" ]] && kill -0 "$fallback_pid" 2>/dev/null; then
+    echo "$fallback_pid" > "$HTTP_PID_FILE"
+    echo "pi-statusd-http already running (pid $fallback_pid)."
+    return 0
+  fi
+
+  nohup python3 "$HTTP_DAEMON" >> "$HTTP_LOG_FILE" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$HTTP_PID_FILE"
+  sleep 0.2
+
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Started pi-statusd-http (pid $pid)."
+  else
+    echo "Failed to start pi-statusd-http. Check $HTTP_LOG_FILE"
+    exit 1
+  fi
+}
+
+stop_http() {
+  local pids
+  pids="$(find_all_http_pids)"
+
+  if [[ -z "$pids" ]]; then
+    echo "pi-statusd-http is not running."
+    rm -f "$HTTP_PID_FILE"
+    return 0
+  fi
+
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    kill "$pid" 2>/dev/null || true
+  done <<< "$pids"
+
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    for _ in {1..20}; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done <<< "$pids"
+
+  rm -f "$HTTP_PID_FILE"
+  echo "Stopped pi-statusd-http."
+}
+
 daemon_status() {
   if is_running; then
     local pid
@@ -107,6 +189,58 @@ daemon_status() {
     echo "socket: not responding"
     return 1
   fi
+}
+
+http_status() {
+  local ok=0
+  if is_http_running; then
+    local pid
+    pid="$(cat "$HTTP_PID_FILE")"
+    echo "pi-statusd-http running (pid $pid)"
+  else
+    echo "pi-statusd-http not running"
+    ok=1
+  fi
+
+  python3 - <<PY || ok=1
+import json, pathlib
+p = pathlib.Path("$HTTP_CONFIG_FILE")
+cfg = {}
+if p.exists():
+    try:
+        cfg = json.loads(p.read_text())
+    except Exception:
+        cfg = {}
+host = cfg.get("host", "0.0.0.0")
+port = cfg.get("port", 8787)
+token = cfg.get("token", "")
+print(f"http: {host}:{port} token={'set' if token else 'unset'}")
+PY
+
+  return "$ok"
+}
+
+http_token() {
+  local token="${1:-}"
+  python3 - <<PY
+import json, pathlib, secrets
+p = pathlib.Path("$HTTP_CONFIG_FILE")
+p.parent.mkdir(parents=True, exist_ok=True)
+try:
+    cfg = json.loads(p.read_text()) if p.exists() else {}
+except Exception:
+    cfg = {}
+
+tok = "$token".strip()
+if not tok:
+    tok = str(cfg.get("token") or "").strip() or secrets.token_urlsafe(24)
+cfg["token"] = tok
+cfg.setdefault("host", "0.0.0.0")
+cfg.setdefault("port", 8787)
+cfg.setdefault("allow_loopback_unauth", True)
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+print(tok)
+PY
 }
 
 terminal_get() {
@@ -167,16 +301,22 @@ show_help() {
 Usage: daemon/statusdctl <command>
 
 Commands:
-  start             Start pi-statusd in background
-  stop              Stop running pi-statusd
-  restart           Restart pi-statusd
-  status            Show process + socket health
-  ping              Check daemon socket health only
-  latest <pid>      Show latest assistant message for pid (telemetry-backed)
-  send <pid> <msg>  Send message to pid via mux/tty injection
-  watch [ms] [fp]   Wait for status/message change and return event JSON
-  terminal          Show configured default terminal (auto/Ghostty/iTerm2/Terminal)
-  terminal <value>  Set terminal: auto | Ghostty | iTerm2 | Terminal
+  start                   Start pi-statusd in background
+  stop                    Stop running pi-statusd
+  restart                 Restart pi-statusd
+  status                  Show process + socket health
+  ping                    Check daemon socket health only
+  latest <pid>            Show latest assistant message for pid (telemetry-backed)
+  send <pid> <msg>        Send message to pid via mux/tty injection
+  watch [ms] [fp]         Wait for status/message change and return event JSON
+  terminal                Show configured default terminal (auto/Ghostty/iTerm2/Terminal)
+  terminal <value>        Set terminal: auto | Ghostty | iTerm2 | Terminal
+
+  http-start              Start HTTP bridge for remote clients
+  http-stop               Stop HTTP bridge
+  http-restart            Restart HTTP bridge
+  http-status             Show HTTP bridge process + config summary
+  http-token [value]      Get or set bearer token in ~/.pi/agent/statusd-http.json
 EOF
 }
 
@@ -228,6 +368,26 @@ case "$cmd" in
       terminal_set "$2"
     else
       terminal_get
+    fi
+    ;;
+  http-start)
+    start_http
+    ;;
+  http-stop)
+    stop_http
+    ;;
+  http-restart)
+    stop_http
+    start_http
+    ;;
+  http-status)
+    http_status
+    ;;
+  http-token)
+    if [[ $# -ge 2 ]]; then
+      http_token "$2"
+    else
+      http_token
     fi
     ;;
   *)

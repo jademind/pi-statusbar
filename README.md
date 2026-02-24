@@ -120,6 +120,27 @@ The detail panel now renders telemetry HTML in a sandboxed WebView with improved
   - `latest <pid>`
   - `send <pid> <message>`
   - `watch [timeout_ms] [fingerprint]`
+
+### Optional HTTP bridge (for iOS / remote clients)
+
+- Script: `daemon/pi_statusd_http.py`
+- Control via `daemon/statusdctl`:
+  - `http-start`
+  - `http-stop`
+  - `http-restart`
+  - `http-status`
+  - `http-token [value]`
+- Config file: `~/.pi/agent/statusd-http.json`
+- Exposed endpoints:
+  - `GET /status`
+  - `GET /watch?timeout_ms=...&fingerprint=...`
+  - `GET /latest/<pid>`
+  - `POST /send` with JSON body `{ "pid": <int>, "message": <string> }`
+- Security defaults:
+  - bearer token for non-loopback clients
+  - optional CIDR allowlist (`allow_cidrs`)
+  - `send` rate limiting and payload validation
+  - `jump` is intentionally **not** exposed over HTTP
 - Status payload version: `2`
 - Source field values:
   - `pi-telemetry`
@@ -232,8 +253,16 @@ swift build
 - `restart`
 - `status`
 - `ping`
+- `latest <pid>`
+- `send <pid> <message>`
+- `watch [timeout_ms] [fingerprint]`
 - `terminal`
 - `terminal <auto|Ghostty|iTerm2|Terminal>`
+- `http-start`
+- `http-stop`
+- `http-restart`
+- `http-status`
+- `http-token [value]`
 
 ---
 
