@@ -329,6 +329,18 @@ daemon/statusdctl ping
 swift run PiStatusBar
 ```
 
+### Refresh daemon + app together (recommended for local dev)
+
+```bash
+daemon/refresh-all.sh
+```
+
+Optional: also reinstall latest published bridge package before re-testing plain terminal delivery:
+
+```bash
+daemon/refresh-all.sh --bridge
+```
+
 ### Build
 
 ```bash
@@ -376,6 +388,11 @@ swift build
 - `restart`
 - `status`
 - `uninstall`
+
+`daemon/refresh-all.sh` supports:
+
+- no args: restart daemon + app, then verify daemon health
+- `--bridge`: same as above, plus `pi install npm:@jademind/pi-bridge`
 
 ---
 

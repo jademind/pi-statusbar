@@ -353,11 +353,11 @@ class Scanner:
                 "error": f"bridge directory error: {e}",
             }
 
-        timeout_ms = self._to_int(os.environ.get("PI_BRIDGE_ACK_TIMEOUT_MS"), default=2200) or 2200
-        retry_attempts = self._to_int(os.environ.get("PI_BRIDGE_SEND_RETRIES"), default=20) or 20
-        retry_backoff_ms = self._to_int(os.environ.get("PI_BRIDGE_SEND_RETRY_BACKOFF_MS"), default=3000) or 3000
-        retry_attempts = max(1, min(30, retry_attempts))
-        retry_backoff_ms = max(100, min(10_000, retry_backoff_ms))
+        timeout_ms = self._to_int(os.environ.get("PI_BRIDGE_ACK_TIMEOUT_MS"), default=1200) or 1200
+        retry_attempts = self._to_int(os.environ.get("PI_BRIDGE_SEND_RETRIES"), default=3) or 3
+        retry_backoff_ms = self._to_int(os.environ.get("PI_BRIDGE_SEND_RETRY_BACKOFF_MS"), default=450) or 450
+        retry_attempts = max(1, min(8, retry_attempts))
+        retry_backoff_ms = max(100, min(3_000, retry_backoff_ms))
 
         last_error: Dict | None = None
 
@@ -787,8 +787,16 @@ return "no"
         if bridge_result is not None:
             if bridge_result.get("ok"):
                 return bridge_result
-            # Bridge was available but rejected/failed this message; avoid duplicate fallback injection.
-            return bridge_result
+
+            bridge_error = str(bridge_result.get("bridge_error") or "")
+            bridge_msg = str(bridge_result.get("error") or "")
+            bridge_rate_limited = bridge_error in ("rate_limited", "bridge_rate_limited", "pi_rate_limited") or ("rate_limited" in bridge_msg)
+
+            # If bridge explicitly rate-limited this message, fall back to terminal delivery
+            # so the user can keep working. Other bridge failures still fail fast to avoid
+            # accidental duplicate sends when delivery state is unknown.
+            if not bridge_rate_limited:
+                return bridge_result
 
         # For zellij/screen, avoid raw TTY injection if mux routing exists but delivery failed.
         if mux in ("zellij", "screen"):

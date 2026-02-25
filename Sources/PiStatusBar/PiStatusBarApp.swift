@@ -616,28 +616,46 @@ struct ContentView: View {
 
     private func sendReply(for agent: AgentState) {
         let current = replyDrafts[agent.pid, default: ""]
+        let text = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            monitor.setMessage("Message is empty")
+            setSendFeedback(
+                SendFeedback(message: "Message is empty", color: .red, symbol: "exclamationmark.triangle.fill", spinning: false),
+                autoHideAfter: 1.8
+            )
+            return
+        }
+
         setSendFeedback(
             SendFeedback(message: "Sending…", color: .blue, symbol: "paperplane", spinning: true)
         )
 
-        DispatchQueue.main.async {
-            if monitor.send(message: current, to: agent) {
-                pendingWorkPids.insert(agent.pid)
-                replyDrafts[agent.pid] = ""
-                refreshLatest(for: agent)
-                setSendFeedback(
-                    SendFeedback(message: "Message sent", color: .green, symbol: "checkmark.circle.fill", spinning: false),
-                    autoHideAfter: 1.4
-                )
-                return
-            }
+        let pid = agent.pid
+        DispatchQueue.global(qos: .userInitiated).async {
+            let response = DaemonClient.sendMessage(pid: pid, message: text)
 
-            pendingWorkPids.remove(agent.pid)
-            let error = monitor.lastMessage ?? "Send failed"
-            setSendFeedback(
-                SendFeedback(message: error, color: .red, symbol: "exclamationmark.triangle.fill", spinning: false),
-                autoHideAfter: 2.4
-            )
+            DispatchQueue.main.async {
+                if let response, response.ok {
+                    let delivery = response.delivery ?? "unknown"
+                    monitor.setMessage("Sent message to PID \(pid) via \(delivery)")
+                    pendingWorkPids.insert(pid)
+                    replyDrafts[pid] = ""
+                    refreshLatest(for: agent)
+                    setSendFeedback(
+                        SendFeedback(message: "Message sent", color: .green, symbol: "checkmark.circle.fill", spinning: false),
+                        autoHideAfter: 1.4
+                    )
+                    return
+                }
+
+                pendingWorkPids.remove(pid)
+                let error = response?.error ?? "Could not send message to PID \(pid)"
+                monitor.setMessage(error)
+                setSendFeedback(
+                    SendFeedback(message: error, color: .red, symbol: "exclamationmark.triangle.fill", spinning: false),
+                    autoHideAfter: 2.4
+                )
+            }
         }
     }
 
