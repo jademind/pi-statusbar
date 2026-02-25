@@ -234,7 +234,7 @@ http_status() {
   fi
 
   python3 - <<PY || ok=1
-import json, pathlib
+import hashlib, json, pathlib, ssl
 p = pathlib.Path("$HTTP_CONFIG_FILE")
 cfg = {}
 if p.exists():
@@ -242,10 +242,27 @@ if p.exists():
         cfg = json.loads(p.read_text())
     except Exception:
         cfg = {}
+
 host = cfg.get("host", "0.0.0.0")
 port = cfg.get("port", 8787)
 token = cfg.get("token", "")
-print(f"http: {host}:{port} token={'set' if token else 'unset'}")
+https_enabled = bool(cfg.get("https_enabled", True))
+https_host = cfg.get("https_host", host)
+https_port = cfg.get("https_port", 8788)
+cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))).expanduser()
+
+fp = "unavailable"
+if cert_path.exists():
+    try:
+        pem = cert_path.read_text()
+        der = ssl.PEM_cert_to_DER_cert(pem)
+        h = hashlib.sha256(der).hexdigest().upper()
+        fp = ":".join(h[i:i+2] for i in range(0, len(h), 2))
+    except Exception:
+        fp = "invalid-cert"
+
+print(f"http:  {host}:{port} token={'set' if token else 'unset'}")
+print(f"https: {https_host}:{https_port} enabled={'yes' if https_enabled else 'no'} cert={cert_path} sha256={fp}")
 PY
 
   return "$ok"
@@ -269,8 +286,37 @@ cfg["token"] = tok
 cfg.setdefault("host", "0.0.0.0")
 cfg.setdefault("port", 8787)
 cfg.setdefault("allow_loopback_unauth", True)
+cfg.setdefault("https_enabled", True)
+cfg.setdefault("https_host", cfg.get("host", "0.0.0.0"))
+cfg.setdefault("https_port", 8788)
+cfg.setdefault("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))
+cfg.setdefault("https_key_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-key.pem"))
 p.write_text(json.dumps(cfg, indent=2) + "\n")
 print(tok)
+PY
+}
+
+http_cert_fingerprint() {
+  python3 - <<PY
+import hashlib, json, pathlib, ssl
+p = pathlib.Path("$HTTP_CONFIG_FILE")
+cfg = {}
+if p.exists():
+    try:
+        cfg = json.loads(p.read_text())
+    except Exception:
+        cfg = {}
+cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))).expanduser()
+if not cert_path.exists():
+    print("")
+    raise SystemExit(0)
+try:
+    pem = cert_path.read_text()
+    der = ssl.PEM_cert_to_DER_cert(pem)
+    h = hashlib.sha256(der).hexdigest().upper()
+    print(":".join(h[i:i+2] for i in range(0, len(h), 2)))
+except Exception:
+    print("")
 PY
 }
 
@@ -361,8 +407,9 @@ Commands:
   http-start              Start HTTP bridge for remote clients
   http-stop               Stop HTTP bridge
   http-restart            Restart HTTP bridge
-  http-status             Show HTTP bridge process + config summary
+  http-status             Show HTTP/HTTPS bridge process + config summary
   http-token [value]      Get or set bearer token in ~/.pi/agent/statusd-http.json
+  http-cert-fingerprint   Print HTTPS cert SHA256 fingerprint (for iOS pinning)
 EOF
 }
 
@@ -440,6 +487,9 @@ case "$cmd" in
     else
       http_token
     fi
+    ;;
+  http-cert-fingerprint)
+    http_cert_fingerprint
     ;;
   *)
     show_help

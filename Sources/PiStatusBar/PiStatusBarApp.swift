@@ -1,4 +1,6 @@
 import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import Foundation
 import SwiftUI
 import WebKit
@@ -534,10 +536,31 @@ struct ContentView: View {
                 .padding(.top, 4)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(agentPrimaryLine(agent))
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(agentPrimaryLine(agent))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Button {
+                        monitor.jump(to: agent)
+                    } label: {
+                        Image(systemName: "arrow.up.right.square")
+                    }
+                    .help("Jump")
+                    .buttonStyle(.plain)
+
+                    Button {
+                        selectAgent(agent)
+                    } label: {
+                        Image(systemName: selected ? "message.fill" : "message")
+                    }
+                    .help("Message")
+                    .buttonStyle(.plain)
+                }
+
 
                 if let cwd = agent.cwd {
                     Text(cwd)
@@ -570,25 +593,9 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer(minLength: 6)
-
-            VStack(alignment: .trailing, spacing: 4) {
-                Button("Jump") {
-                    monitor.jump(to: agent)
-                }
-                .font(.caption2)
-                .buttonStyle(.link)
-
-                Image(systemName: selected ? "checkmark.circle.fill" : "chevron.right.circle")
-                    .font(.caption)
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-            }
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
-        .onTapGesture {
-            selectAgent(agent)
-        }
     }
 
     private func setSendFeedback(_ feedback: SendFeedback?, autoHideAfter seconds: TimeInterval? = nil) {
@@ -741,6 +748,21 @@ struct ContentView: View {
         )
     }
 
+    private func showAppConnectWindow() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = AppConnectPayloadProvider.build()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let payload):
+                    AppConnectWindowController.shared.show(payload: payload)
+                    monitor.setMessage("App Connect ready: \(payload.baseURL)")
+                case .failure(let error):
+                    monitor.setMessage(error.localizedDescription)
+                }
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -797,20 +819,32 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Divider()
+            //Divider()
 
             HStack {
                 Text("Refresh: 2s")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Refresh now") {
+                Button {
                     monitor.refresh()
+                } label: {
+                    Label("Refresh now", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
 
-                Button("Quit") {
+                Button {
+                    showAppConnectWindow()
+                } label: {
+                    Label("App Connect", systemImage: "gearshape")
+                }
+                .buttonStyle(.borderless)
+
+                Button {
                     NSApp.terminate(nil)
+                } label: {
+                    Label("Quit", systemImage: "power")
+                        .foregroundStyle(.red)
                 }
                 .buttonStyle(.borderless)
             }
@@ -854,6 +888,260 @@ struct ContentView: View {
             feedbackHideWorkItem?.cancel()
             feedbackHideWorkItem = nil
         }
+    }
+}
+
+struct AppConnectPayload {
+    let baseURL: String
+    let token: String
+    let insecureFallbackBaseURL: String
+    let tlsCertSHA256: String?
+
+    var qrText: String {
+        var payload: [String: Any] = [
+            "baseURL": baseURL,
+            "token": token,
+            "insecureFallbackBaseURL": insecureFallbackBaseURL,
+        ]
+        if let tlsCertSHA256, !tlsCertSHA256.isEmpty {
+            payload["tlsCertSHA256"] = tlsCertSHA256
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{\"baseURL\":\"\(baseURL)\",\"token\":\"\(token)\"}"
+        }
+        return text
+    }
+}
+
+enum AppConnectError: LocalizedError {
+    case tokenUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .tokenUnavailable:
+            return "App Connect failed: could not fetch token"
+        }
+    }
+}
+
+enum AppConnectPayloadProvider {
+    static func build() -> Result<AppConnectPayload, AppConnectError> {
+        _ = runCommand("daemon/statusdctl http-token")
+        _ = runCommand("daemon/statusdctl http-start >/dev/null 2>&1 || true")
+
+        let token = runCommand("daemon/statusdctl http-token")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !token.isEmpty else {
+            return .failure(.tokenUnavailable)
+        }
+
+        let host = resolveHost()
+        let httpsBaseURL = "https://\(host):8788"
+        let httpBaseURL = "http://\(host):8787"
+        let tlsCertSHA256 = runCommand("daemon/statusdctl http-cert-fingerprint")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let preferred = (tlsCertSHA256?.isEmpty == false) ? httpsBaseURL : httpBaseURL
+
+        return .success(
+            AppConnectPayload(
+                baseURL: preferred,
+                token: token,
+                insecureFallbackBaseURL: httpBaseURL,
+                tlsCertSHA256: tlsCertSHA256?.isEmpty == false ? tlsCertSHA256 : nil
+            )
+        )
+    }
+
+    private static func resolveHost() -> String {
+        if let tailscale = runCommand("tailscale ip")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !tailscale.isEmpty,
+           let ip = pickBestIP(from: tailscale) {
+            return ip
+        }
+
+        if let publicIP = runCommand("curl -fsS https://api.ipify.org")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !publicIP.isEmpty {
+            return publicIP
+        }
+
+        return "localhost"
+    }
+
+    private static func pickBestIP(from output: String) -> String? {
+        let candidates = output
+            .components(separatedBy: .whitespacesAndNewlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if let ipv4 = candidates.first(where: { $0.contains(".") }) {
+            return ipv4
+        }
+        return candidates.first
+    }
+
+    private static func runCommand(_ command: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", command]
+
+        let out = Pipe()
+        let err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0 else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+@MainActor
+final class AppConnectWindowController {
+    static let shared = AppConnectWindowController()
+
+    private var window: NSWindow?
+
+    func close() {
+        window?.close()
+        window = nil
+    }
+
+    func show(payload: AppConnectPayload) {
+        let view = AppConnectView(payload: payload)
+        if let window,
+           let hosting = window.contentViewController as? NSHostingController<AppConnectView> {
+            hosting.rootView = view
+            window.setContentSize(NSSize(width: 340, height: 500))
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let hosting = NSHostingController(rootView: view)
+        let window = NSWindow(contentViewController: hosting)
+        window.setContentSize(NSSize(width: 340, height: 500))
+        window.styleMask = [.borderless]
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        self.window = window
+    }
+}
+
+struct AppConnectView: View {
+    let payload: AppConnectPayload
+
+    private var qrImage: NSImage? {
+        let context = CIContext()
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(payload.qrText.utf8)
+        filter.correctionLevel = "M"
+
+        guard let output = filter.outputImage else { return nil }
+        let transformed = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        guard let cgImage = context.createCGImage(transformed, from: transformed.extent) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: 220, height: 220))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                Text("App Connect")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    AppConnectWindowController.shared.close()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Group {
+                if let qrImage {
+                    Image(nsImage: qrImage)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 220, height: 220)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                } else {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.gray.opacity(0.15))
+                        .frame(width: 220, height: 220)
+                        .overlay(Text("QR unavailable").font(.caption).foregroundStyle(.secondary))
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("URL")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(payload.baseURL)
+                    .font(.caption2)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                if let tls = payload.tlsCertSHA256, !tls.isEmpty {
+                    Text("Cert Fingerprint")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(tls)
+                        .font(.caption2)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                }
+                Text("Token")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(payload.token)
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Scan this QR code with the pi pulse app.")
+                Text("Pi Pulse should prefer HTTPS using the pinned TLS SHA256 fingerprint.")
+                Text("Verify the shown IP/base URL is reachable from your phone.")
+                Text("Recommended: use Tailscale for secure access.")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .frame(width: 340, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.98))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
     }
 }
 

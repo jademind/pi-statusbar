@@ -95,4 +95,8 @@ final class AgentMonitor: ObservableObject {
         }
         return response
     }
+
+    func setMessage(_ message: String) {
+        lastMessage = message
+    }
 }

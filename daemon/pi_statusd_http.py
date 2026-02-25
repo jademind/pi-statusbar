@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
 import socket
+import ssl
+import subprocess
+import threading
 import time
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +19,15 @@ from urllib.parse import parse_qs, urlparse
 
 SOCKET_PATH = Path.home() / ".pi" / "agent" / "statusd.sock"
 CONFIG_PATH = Path.home() / ".pi" / "agent" / "statusd-http.json"
+DEFAULT_CERT_PATH = Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"
+DEFAULT_KEY_PATH = Path.home() / ".pi" / "agent" / "statusd-http-key.pem"
+
+
+def _expand_path(value: str | None, fallback: Path) -> Path:
+    raw = (value or "").strip()
+    if not raw:
+        return fallback
+    return Path(raw).expanduser()
 
 
 def load_config() -> dict[str, Any]:
@@ -40,6 +53,12 @@ def load_config() -> dict[str, Any]:
     allow_loopback_unauth = bool(cfg.get("allow_loopback_unauth", True))
     send_rate_per_10s = int(cfg.get("send_rate_per_10s", 12))
 
+    https_enabled = bool(cfg.get("https_enabled", True))
+    https_host = str(cfg.get("https_host") or host)
+    https_port = int(cfg.get("https_port") or 8788)
+    https_cert_path = _expand_path(str(cfg.get("https_cert_path") or ""), DEFAULT_CERT_PATH)
+    https_key_path = _expand_path(str(cfg.get("https_key_path") or ""), DEFAULT_KEY_PATH)
+
     return {
         "host": host,
         "port": max(1, min(65535, port)),
@@ -47,6 +66,11 @@ def load_config() -> dict[str, Any]:
         "allow_cidrs": allow_cidrs,
         "allow_loopback_unauth": allow_loopback_unauth,
         "send_rate_per_10s": max(1, min(200, send_rate_per_10s)),
+        "https_enabled": https_enabled,
+        "https_host": https_host,
+        "https_port": max(1, min(65535, https_port)),
+        "https_cert_path": https_cert_path,
+        "https_key_path": https_key_path,
     }
 
 
@@ -69,6 +93,45 @@ def request_socket(req: str) -> dict[str, Any]:
     return json.loads(payload) if payload else {"ok": False, "error": "empty daemon response"}
 
 
+def ensure_self_signed_cert(cert_path: Path, key_path: Path) -> None:
+    if cert_path.exists() and key_path.exists():
+        return
+
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "openssl",
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-sha256",
+        "-days",
+        "3650",
+        "-keyout",
+        str(key_path),
+        "-out",
+        str(cert_path),
+        "-subj",
+        "/CN=pi-statusd-http",
+        "-addext",
+        "subjectAltName=DNS:localhost,IP:127.0.0.1",
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def cert_fingerprint_sha256(cert_path: Path) -> str | None:
+    try:
+        pem = cert_path.read_text()
+        der = ssl.PEM_cert_to_DER_cert(pem)
+        digest = hashlib.sha256(der).hexdigest().upper()
+        return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+    except Exception:
+        return None
+
+
 class RateLimiter:
     def __init__(self, limit: int = 12) -> None:
         self.limit = limit
@@ -86,7 +149,7 @@ class RateLimiter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "pi-statusd-http/0.1"
+    server_version = "pi-statusd-http/0.2"
 
     def _json(self, code: int, payload: dict[str, Any]) -> None:
         data = (json.dumps(payload) + "\n").encode("utf-8")
@@ -147,7 +210,6 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def log_message(self, format: str, *args: Any) -> None:
-        # Keep logs concise in daemon log file.
         print(f"[statusd-http] {self.address_string()} - {format % args}", flush=True)
 
     def do_GET(self) -> None:
@@ -164,6 +226,18 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/health":
             self._json(200, {"ok": True, "pong": True, "timestamp": int(time.time())})
+            return
+
+        if path == "/tls":
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "https_enabled": bool(getattr(self.server, "https_enabled", False)),
+                    "https_port": int(getattr(self.server, "https_port", 0)),
+                    "cert_sha256": getattr(self.server, "cert_sha256", None),
+                },
+            )
             return
 
         if path == "/status":
@@ -264,6 +338,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json(502, {"ok": False, "error": f"daemon unavailable: {e}"})
 
 
+def apply_shared_server_state(server: ThreadingHTTPServer, cfg: dict[str, Any], cert_sha256: str | None) -> None:
+    server.token = cfg.get("token")
+    server.allow_cidrs = cfg.get("allow_cidrs") or []
+    server.allow_loopback_unauth = bool(cfg.get("allow_loopback_unauth", True))
+    server.send_limiter = RateLimiter(limit=int(cfg.get("send_rate_per_10s", 12)))
+    server.https_enabled = bool(cfg.get("https_enabled", False))
+    server.https_port = int(cfg.get("https_port", 0))
+    server.cert_sha256 = cert_sha256
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default=None)
@@ -274,16 +358,48 @@ def main() -> None:
     host = args.host or cfg["host"]
     port = int(args.port or cfg["port"])
 
+    cert_sha256: str | None = None
+
+    # HTTP endpoint (existing behavior)
     httpd = ThreadingHTTPServer((host, port), Handler)
-    httpd.token = cfg.get("token")
-    httpd.allow_cidrs = cfg.get("allow_cidrs") or []
-    httpd.allow_loopback_unauth = bool(cfg.get("allow_loopback_unauth", True))
-    httpd.send_limiter = RateLimiter(limit=int(cfg.get("send_rate_per_10s", 12)))
+    apply_shared_server_state(httpd, cfg, cert_sha256)
 
     print(
-        f"[statusd-http] listening on {host}:{port} token={'set' if httpd.token else 'unset'} cidrs={httpd.allow_cidrs or 'any'}",
+        f"[statusd-http] http listening on {host}:{port} token={'set' if httpd.token else 'unset'} cidrs={httpd.allow_cidrs or 'any'}",
         flush=True,
     )
+
+    # Optional HTTPS endpoint with self-signed cert
+    https_enabled = bool(cfg.get("https_enabled", True))
+    if https_enabled:
+        cert_path: Path = cfg["https_cert_path"]
+        key_path: Path = cfg["https_key_path"]
+        try:
+            ensure_self_signed_cert(cert_path, key_path)
+            cert_sha256 = cert_fingerprint_sha256(cert_path)
+
+            https_host = str(cfg.get("https_host") or host)
+            https_port = int(cfg.get("https_port") or 8788)
+            httpsd = ThreadingHTTPServer((https_host, https_port), Handler)
+            apply_shared_server_state(httpsd, cfg, cert_sha256)
+
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+            httpsd.socket = context.wrap_socket(httpsd.socket, server_side=True)
+
+            t = threading.Thread(target=httpsd.serve_forever, name="statusd-https", daemon=True)
+            t.start()
+
+            print(
+                f"[statusd-http] https listening on {https_host}:{https_port} cert_sha256={cert_sha256 or 'unknown'}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[statusd-http] https disabled (setup failed): {e}", flush=True)
+
+    # Update HTTP server state with cert metadata too
+    apply_shared_server_state(httpd, cfg, cert_sha256)
     httpd.serve_forever()
 
 
