@@ -300,10 +300,57 @@ brew tap jademind/tap
 brew install jademind/tap/pi-statusbar
 ```
 
+Or one-line install:
+
+```bash
+brew install jademind/tap/pi-statusbar
+```
+
 If only `head` is defined in the formula, users install with:
 
 ```bash
 brew install --HEAD jademind/tap/pi-statusbar
+```
+
+### Start after install (recommended)
+
+```bash
+statusd-service install
+statusd-service start
+statusbar-app-service install
+statusbar-app-service start
+```
+
+Verify:
+
+```bash
+statusd-service status
+statusbar-app-service status
+```
+
+> Why not auto-start during `brew install`?
+> Homebrew formulas should not silently start background services or register user LaunchAgents without explicit user consent. The commands above are explicit and reproducible.
+
+### Stop / disable / remove
+
+Stop now (keep installed):
+
+```bash
+statusd-service stop
+statusbar-app-service stop
+```
+
+Disable autostart (remove LaunchAgents):
+
+```bash
+statusd-service uninstall
+statusbar-app-service uninstall
+```
+
+Remove package:
+
+```bash
+brew uninstall jademind/tap/pi-statusbar
 ```
 
 ---

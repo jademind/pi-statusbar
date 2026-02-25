@@ -37,6 +37,28 @@ class PiStatusbar < Formula
     error_log_path var/"log/pi-statusd.log"
   end
 
+  def caveats
+    <<~EOS
+      Start now + enable at login:
+        statusd-service install
+        statusd-service start
+        statusbar-app-service install
+        statusbar-app-service start
+
+      Verify:
+        statusd-service status
+        statusbar-app-service status
+
+      Stop:
+        statusd-service stop
+        statusbar-app-service stop
+
+      Disable autostart:
+        statusd-service uninstall
+        statusbar-app-service uninstall
+    EOS
+  end
+
   test do
     output = shell_output("#{bin}/statusdctl status 2>&1", 1)
     assert_match "pi-statusd", output
