@@ -498,6 +498,69 @@ class Scanner:
                 except Exception:
                     pass
 
+    def _send_via_terminal_script(self, text: str, tty: str, app_name: str | None) -> bool:
+        target_tty = self._applescript_escape(tty)
+        payload = self._applescript_escape(text)
+
+        # Prefer the detected terminal app first, then try the other supported one.
+        order: List[str] = []
+        if app_name in ("iTerm2", "Terminal"):
+            order.append(app_name)
+        for candidate in ("iTerm2", "Terminal"):
+            if candidate not in order:
+                order.append(candidate)
+
+        for candidate in order:
+            if candidate == "iTerm2":
+                script = f'''
+set targetTTY to "{target_tty}"
+set payload to "{payload}"
+try
+  tell application "iTerm2"
+    repeat with w in windows
+      repeat with tb in tabs of w
+        repeat with s in sessions of tb
+          try
+            if (tty of s as text) ends with targetTTY then
+              write text payload newline YES to s
+              return "ok"
+            end if
+          end try
+        end repeat
+      end repeat
+    end repeat
+  end tell
+end try
+return "no"
+'''
+                if self._run_osascript(script) == "ok":
+                    return True
+
+            if candidate == "Terminal":
+                script = f'''
+set targetTTY to "{target_tty}"
+set payload to "{payload}"
+try
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with tb in tabs of w
+        try
+          if (tty of tb as text) ends with targetTTY then
+            do script payload in tb
+            return "ok"
+          end if
+        end try
+      end repeat
+    end repeat
+  end tell
+end try
+return "no"
+'''
+                if self._run_osascript(script) == "ok":
+                    return True
+
+        return False
+
     def _send_via_ui_typing(
         self,
         text: str,
@@ -707,6 +770,16 @@ return "no"
         cwd = row.get("cwd")
         terminal_app, terminal_pid = self._detect_terminal_target_for_pid(pid, by_pid)
         hints = self._build_focus_hints(mux_session, cwd, tty)
+
+        # Preferred fallback for iTerm2/Terminal: script-based write to the matching tty session/tab.
+        if tty and tty != "??" and self._send_via_terminal_script(text, tty, terminal_app):
+            return {
+                "ok": True,
+                "pid": pid,
+                "delivery": "terminal-script",
+                "tty": tty,
+                "terminal_app": terminal_app,
+            }
 
         # Last-resort for direct shell/tmux fallback: inject into tty input queue.
         if tty and tty != "??" and self._inject_tty_input(tty, text):
