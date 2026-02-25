@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR_DEFAULT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="${PI_STATUSBAR_ROOT:-$ROOT_DIR_DEFAULT}"
+
+STATUSD_SERVICE="$ROOT_DIR/daemon/statusd-service"
+APP_SERVICE="$ROOT_DIR/daemon/statusbar-app-service"
+STATUSDCTL="$ROOT_DIR/daemon/statusdctl"
+
+if [[ ! -x "$STATUSD_SERVICE" || ! -x "$APP_SERVICE" || ! -x "$STATUSDCTL" ]]; then
+  echo "Could not locate required scripts under: $ROOT_DIR/daemon"
+  echo "Set PI_STATUSBAR_ROOT to your pi-statusbar repo/install root."
+  exit 1
+fi
+
+run_now_no_login() {
+  "$STATUSDCTL" ensure
+
+  if pgrep -x PiStatusBar >/dev/null 2>&1 || pgrep -f "swift.*PiStatusBar" >/dev/null 2>&1; then
+    echo "PiStatusBar already running"
+    return 0
+  fi
+
+  nohup PiStatusBar >/dev/null 2>&1 &
+  sleep 0.2
+
+  if pgrep -x PiStatusBar >/dev/null 2>&1 || pgrep -f "swift.*PiStatusBar" >/dev/null 2>&1; then
+    echo "Started PiStatusBar"
+  else
+    echo "Could not start PiStatusBar from PATH."
+    echo "If you're in a repo checkout, run: swift run PiStatusBar"
+    exit 1
+  fi
+}
+
+enable_with_login() {
+  "$STATUSD_SERVICE" install
+  "$STATUSD_SERVICE" start
+  "$APP_SERVICE" install
+  "$APP_SERVICE" start
+}
+
+stop_now() {
+  "$APP_SERVICE" stop || true
+  "$STATUSD_SERVICE" stop || true
+}
+
+remove_login_autostart() {
+  "$APP_SERVICE" uninstall || true
+  "$STATUSD_SERVICE" uninstall || true
+}
+
+show_status() {
+  echo "== daemon =="
+  "$STATUSD_SERVICE" status || true
+  echo
+  echo "== app =="
+  "$APP_SERVICE" status || true
+}
+
+show_help() {
+  cat <<'EOF'
+Usage: statusbar-setup <command> [options]
+
+Commands:
+  enable [--login yes|no]   Start daemon + app now. Default login=yes.
+                            --login yes: install LaunchAgents and start now.
+                            --login no: start now only, no LaunchAgent changes.
+
+  stop [--remove yes|no]    Stop daemon + app now. Default remove=no.
+                            --remove yes: also uninstall LaunchAgents.
+
+  remove                    Uninstall LaunchAgents and stop both components.
+  status                    Show daemon/app registered + running state.
+
+Examples:
+  statusbar-setup enable
+  statusbar-setup enable --login no
+  statusbar-setup stop
+  statusbar-setup stop --remove yes
+  statusbar-setup remove
+EOF
+}
+
+cmd="${1:-status}"
+shift || true
+
+case "$cmd" in
+  enable)
+    login_mode="yes"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --login)
+          login_mode="${2:-yes}"
+          shift 2
+          ;;
+        *)
+          echo "Unknown option: $1"
+          show_help
+          exit 2
+          ;;
+      esac
+    done
+
+    case "$(printf '%s' "$login_mode" | tr '[:upper:]' '[:lower:]')" in
+      yes|true|1)
+        enable_with_login
+        ;;
+      no|false|0)
+        run_now_no_login
+        ;;
+      *)
+        echo "Invalid value for --login: $login_mode (use yes|no)"
+        exit 2
+        ;;
+    esac
+    ;;
+
+  stop)
+    remove_mode="no"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --remove)
+          remove_mode="${2:-no}"
+          shift 2
+          ;;
+        *)
+          echo "Unknown option: $1"
+          show_help
+          exit 2
+          ;;
+      esac
+    done
+
+    stop_now
+
+    case "$(printf '%s' "$remove_mode" | tr '[:upper:]' '[:lower:]')" in
+      yes|true|1)
+        remove_login_autostart
+        ;;
+      no|false|0)
+        ;;
+      *)
+        echo "Invalid value for --remove: $remove_mode (use yes|no)"
+        exit 2
+        ;;
+    esac
+    ;;
+
+  remove)
+    remove_login_autostart
+    ;;
+
+  status)
+    show_status
+    ;;
+
+  -h|--help|help)
+    show_help
+    ;;
+
+  *)
+    echo "Unknown command: $cmd"
+    show_help
+    exit 2
+    ;;
+esac

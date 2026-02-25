@@ -256,6 +256,7 @@ This installs:
 - `statusdctl` (daemon control)
 - `statusd-service` (daemon LaunchAgent management)
 - `statusbar-app-service` (menu bar app LaunchAgent management)
+- `statusbar-setup` (one-command helper for enable/stop/remove flows)
 
 ### Start daemon via brew service (optional)
 
@@ -314,37 +315,39 @@ brew install --HEAD jademind/tap/pi-statusbar
 
 ### Start after install (recommended)
 
+One-command setup (start now + enable at login):
+
 ```bash
-statusd-service install
-statusd-service start
-statusbar-app-service install
-statusbar-app-service start
+statusbar-setup enable
+```
+
+Start now only (no login autostart):
+
+```bash
+statusbar-setup enable --login no
 ```
 
 Verify:
 
 ```bash
-statusd-service status
-statusbar-app-service status
+statusbar-setup status
 ```
 
 > Why not auto-start during `brew install`?
-> Homebrew formulas should not silently start background services or register user LaunchAgents without explicit user consent. The commands above are explicit and reproducible.
+> Homebrew formulas should not silently start background services or register user LaunchAgents without explicit user consent. `statusbar-setup` keeps this explicit while minimizing setup friction.
 
 ### Stop / disable / remove
 
-Stop now (keep installed):
+Stop now (keep login settings):
 
 ```bash
-statusd-service stop
-statusbar-app-service stop
+statusbar-setup stop
 ```
 
-Disable autostart (remove LaunchAgents):
+Stop now + remove login autostart:
 
 ```bash
-statusd-service uninstall
-statusbar-app-service uninstall
+statusbar-setup stop --remove yes
 ```
 
 Remove package:
@@ -440,6 +443,13 @@ swift build
 
 - no args: restart daemon + app, then verify daemon health
 - `--bridge`: same as above, plus `pi install npm:@jademind/pi-bridge`
+
+`daemon/statusbar-setup` supports:
+
+- `enable [--login yes|no]`
+- `stop [--remove yes|no]`
+- `remove`
+- `status`
 
 ---
 
