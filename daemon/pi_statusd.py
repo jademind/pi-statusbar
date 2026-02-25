@@ -353,79 +353,113 @@ class Scanner:
                 "error": f"bridge directory error: {e}",
             }
 
-        now_ms = int(time.time() * 1000)
-        expires_ms = now_ms + 60_000
-        msg_id = str(uuid.uuid4())
-        envelope = {
-            "v": 1,
-            "id": msg_id,
-            "pid": pid,
-            "text": text,
-            "source": "statusbar",
-            "createdAt": datetime.utcfromtimestamp(now_ms / 1000.0).isoformat(timespec="milliseconds") + "Z",
-            "expiresAt": datetime.utcfromtimestamp(expires_ms / 1000.0).isoformat(timespec="milliseconds") + "Z",
-            "delivery": {
-                "mode": "interrupt" if mode == "interrupt" else "queued",
-            },
-            "meta": {
-                "requestId": f"statusd-{msg_id}",
-            },
-        }
+        timeout_ms = self._to_int(os.environ.get("PI_BRIDGE_ACK_TIMEOUT_MS"), default=2200) or 2200
+        retry_attempts = self._to_int(os.environ.get("PI_BRIDGE_SEND_RETRIES"), default=20) or 20
+        retry_backoff_ms = self._to_int(os.environ.get("PI_BRIDGE_SEND_RETRY_BACKOFF_MS"), default=3000) or 3000
+        retry_attempts = max(1, min(30, retry_attempts))
+        retry_backoff_ms = max(100, min(10_000, retry_backoff_ms))
 
-        inbox_file = inbox_dir / f"{msg_id}.json"
-        tmp_file = inbox_dir / f".{msg_id}.tmp"
-        ack_file = ack_dir / f"{msg_id}.json"
+        last_error: Dict | None = None
 
-        try:
-            tmp_file.write_text(json.dumps(envelope))
-            os.replace(tmp_file, inbox_file)
-        except Exception as e:
-            try:
-                if tmp_file.exists():
-                    tmp_file.unlink()
-            except Exception:
-                pass
-            return {
-                "ok": False,
+        for attempt in range(retry_attempts):
+            now_ms = int(time.time() * 1000)
+            expires_ms = now_ms + 60_000
+            msg_id = str(uuid.uuid4())
+            envelope = {
+                "v": 1,
+                "id": msg_id,
                 "pid": pid,
-                "delivery": "pi-bridge",
-                "error": f"bridge enqueue failed: {e}",
+                "text": text,
+                "source": "statusbar",
+                "createdAt": datetime.utcfromtimestamp(now_ms / 1000.0).isoformat(timespec="milliseconds") + "Z",
+                "expiresAt": datetime.utcfromtimestamp(expires_ms / 1000.0).isoformat(timespec="milliseconds") + "Z",
+                "delivery": {
+                    "mode": "interrupt" if mode == "interrupt" else "queued",
+                },
+                "meta": {
+                    "requestId": f"statusd-{msg_id}",
+                    "attempt": attempt + 1,
+                },
             }
 
-        timeout_ms = self._to_int(os.environ.get("PI_BRIDGE_ACK_TIMEOUT_MS"), default=2200) or 2200
-        deadline = time.time() + max(0.2, timeout_ms / 1000.0)
-        while time.time() < deadline:
-            if ack_file.exists():
+            inbox_file = inbox_dir / f"{msg_id}.json"
+            tmp_file = inbox_dir / f".{msg_id}.tmp"
+            ack_file = ack_dir / f"{msg_id}.json"
+
+            try:
+                tmp_file.write_text(json.dumps(envelope))
+                os.replace(tmp_file, inbox_file)
+            except Exception as e:
                 try:
-                    ack = json.loads(ack_file.read_text())
+                    if tmp_file.exists():
+                        tmp_file.unlink()
                 except Exception:
-                    ack = {"status": "failed", "error": "invalid_ack"}
-                status = str((ack or {}).get("status") or "failed")
-                if status == "delivered":
-                    return {
-                        "ok": True,
-                        "pid": pid,
-                        "delivery": "pi-bridge",
-                        "bridge_mode": (ack or {}).get("resolvedMode") or envelope["delivery"]["mode"],
-                        "bridge_ack": status,
-                    }
+                    pass
                 return {
                     "ok": False,
                     "pid": pid,
                     "delivery": "pi-bridge",
-                    "error": f"bridge ack: {status}",
+                    "error": f"bridge enqueue failed: {e}",
+                }
+
+            deadline = time.time() + max(0.2, timeout_ms / 1000.0)
+            ack = None
+            while time.time() < deadline:
+                if ack_file.exists():
+                    try:
+                        ack = json.loads(ack_file.read_text())
+                    except Exception:
+                        ack = {"status": "failed", "error": "invalid_ack"}
+                    break
+                time.sleep(0.05)
+
+            if ack is None:
+                last_error = {
+                    "ok": False,
+                    "pid": pid,
+                    "delivery": "pi-bridge",
+                    "error": "bridge ack timeout",
+                    "bridge_mode": envelope["delivery"]["mode"],
+                    "bridge_attempt": attempt + 1,
+                }
+                break
+
+            status = str((ack or {}).get("status") or "failed")
+            if status == "delivered":
+                resp = {
+                    "ok": True,
+                    "pid": pid,
+                    "delivery": "pi-bridge",
                     "bridge_mode": (ack or {}).get("resolvedMode") or envelope["delivery"]["mode"],
                     "bridge_ack": status,
-                    "bridge_error": (ack or {}).get("error"),
                 }
-            time.sleep(0.05)
+                if attempt > 0:
+                    resp["bridge_attempts"] = attempt + 1
+                return resp
 
-        return {
+            bridge_error = str((ack or {}).get("error") or "")
+            last_error = {
+                "ok": False,
+                "pid": pid,
+                "delivery": "pi-bridge",
+                "error": f"bridge ack: {status}",
+                "bridge_mode": (ack or {}).get("resolvedMode") or envelope["delivery"]["mode"],
+                "bridge_ack": status,
+                "bridge_error": bridge_error or None,
+                "bridge_attempt": attempt + 1,
+            }
+
+            should_retry = bridge_error in ("rate_limited", "bridge_rate_limited", "pi_rate_limited") and attempt < (retry_attempts - 1)
+            if should_retry:
+                time.sleep(retry_backoff_ms / 1000.0)
+                continue
+            return last_error
+
+        return last_error or {
             "ok": False,
             "pid": pid,
             "delivery": "pi-bridge",
-            "error": "bridge ack timeout",
-            "bridge_mode": envelope["delivery"]["mode"],
+            "error": "bridge delivery failed",
         }
 
     def _tmux_target_for_tty(self, tty: str | None) -> str | None:
