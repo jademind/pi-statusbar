@@ -960,6 +960,13 @@ enum AppConnectError: LocalizedError {
 }
 
 enum AppConnectPayloadProvider {
+    private struct HTTPPorts {
+        let http: Int
+        let https: Int
+
+        static let defaults = HTTPPorts(http: 8787, https: 8788)
+    }
+
     static func build() -> Result<AppConnectPayload, AppConnectError> {
         _ = runCommand("daemon/pi-statusbar http-token")
 
@@ -974,8 +981,9 @@ enum AppConnectPayloadProvider {
         }
 
         let host = resolveHost()
-        let httpsBaseURL = "https://\(host):8788"
-        let httpBaseURL = "http://\(host):8787"
+        let ports = resolveHTTPPorts()
+        let httpsBaseURL = "https://\(host):\(ports.https)"
+        let httpBaseURL = "http://\(host):\(ports.http)"
         let tlsCertSHA256 = preStartFingerprint ?? waitForCertFingerprint()
 
         let preferred = (tlsCertSHA256?.isEmpty == false) ? httpsBaseURL : httpBaseURL
@@ -1007,6 +1015,18 @@ enum AppConnectPayloadProvider {
             }
         }
         return nil
+    }
+
+    private static func resolveHTTPPorts() -> HTTPPorts {
+        guard let raw = runCommand("daemon/pi-statusbar http-ports")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .defaults
+        }
+
+        let http = (obj["httpPort"] as? NSNumber)?.intValue ?? HTTPPorts.defaults.http
+        let https = (obj["httpsPort"] as? NSNumber)?.intValue ?? HTTPPorts.defaults.https
+        return HTTPPorts(http: http, https: https)
     }
 
     private static func resolveHost() -> String {

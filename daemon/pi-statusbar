@@ -25,6 +25,11 @@ HTTP_PID_FILE="$STATE_DIR/statusd-http.pid"
 HTTP_LOG_FILE="$STATE_DIR/statusd-http.log"
 HTTP_CONFIG_FILE="$STATE_DIR/statusd-http.json"
 
+HTTP_DEFAULT_PORT=8787
+HTTPS_DEFAULT_PORT=8788
+CLI_HTTP_PORT=""
+CLI_HTTPS_PORT=""
+
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 DAEMON_PLIST_PATH="$LAUNCH_AGENTS_DIR/dev.jademind.pi-statusd.plist"
 DAEMON_LABEL="dev.jademind.pi-statusd"
@@ -54,6 +59,72 @@ service_target() {
 is_label_loaded() {
   local label="$1"
   launchctl print "$(service_target)/$label" >/dev/null 2>&1
+}
+
+valid_port() {
+  local v="$1"
+  [[ "$v" =~ ^[0-9]+$ ]] && (( v >= 1 && v <= 65535 ))
+}
+
+parse_common_options() {
+  PASSTHRU_ARGS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --http-port)
+        CLI_HTTP_PORT="${2:-}"
+        [[ -n "$CLI_HTTP_PORT" ]] || { echo "Missing value for --http-port"; exit 2; }
+        valid_port "$CLI_HTTP_PORT" || { echo "Invalid --http-port: $CLI_HTTP_PORT (1-65535)"; exit 2; }
+        shift 2
+        ;;
+      --https-port)
+        CLI_HTTPS_PORT="${2:-}"
+        [[ -n "$CLI_HTTPS_PORT" ]] || { echo "Missing value for --https-port"; exit 2; }
+        valid_port "$CLI_HTTPS_PORT" || { echo "Invalid --https-port: $CLI_HTTPS_PORT (1-65535)"; exit 2; }
+        shift 2
+        ;;
+      *)
+        PASSTHRU_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+apply_http_port_overrides() {
+  if [[ -z "$CLI_HTTP_PORT" && -z "$CLI_HTTPS_PORT" ]]; then
+    return 0
+  fi
+
+  local http_port="$CLI_HTTP_PORT"
+  local https_port="$CLI_HTTPS_PORT"
+
+  python3 - <<PY
+import json, pathlib
+p = pathlib.Path("$HTTP_CONFIG_FILE")
+p.parent.mkdir(parents=True, exist_ok=True)
+try:
+    cfg = json.loads(p.read_text()) if p.exists() else {}
+except Exception:
+    cfg = {}
+
+http_default = int("$HTTP_DEFAULT_PORT")
+https_default = int("$HTTPS_DEFAULT_PORT")
+cfg.setdefault("host", "0.0.0.0")
+cfg.setdefault("port", http_default)
+cfg.setdefault("https_enabled", True)
+cfg.setdefault("https_host", cfg.get("host", "0.0.0.0"))
+cfg.setdefault("https_port", https_default)
+cfg.setdefault("allow_loopback_unauth", True)
+
+http_port = "$http_port".strip()
+https_port = "$https_port".strip()
+if http_port:
+    cfg["port"] = int(http_port)
+if https_port:
+    cfg["https_port"] = int(https_port)
+
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+PY
 }
 
 # -------- daemon process control --------
@@ -221,11 +292,11 @@ if p.exists():
     try: cfg = json.loads(p.read_text())
     except Exception: cfg = {}
 host = cfg.get("host", "0.0.0.0")
-port = cfg.get("port", 8787)
+port = cfg.get("port", int("$HTTP_DEFAULT_PORT"))
 token = cfg.get("token", "")
 https_enabled = bool(cfg.get("https_enabled", True))
 https_host = cfg.get("https_host", host)
-https_port = cfg.get("https_port", 8788)
+https_port = cfg.get("https_port", int("$HTTPS_DEFAULT_PORT"))
 cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))).expanduser()
 fp = "unavailable"
 if cert_path.exists():
@@ -254,11 +325,11 @@ if not tok:
     tok = str(cfg.get("token") or "").strip() or secrets.token_urlsafe(24)
 cfg["token"] = tok
 cfg.setdefault("host", "0.0.0.0")
-cfg.setdefault("port", 8787)
+cfg.setdefault("port", int("$HTTP_DEFAULT_PORT"))
 cfg.setdefault("allow_loopback_unauth", True)
 cfg.setdefault("https_enabled", True)
 cfg.setdefault("https_host", cfg.get("host", "0.0.0.0"))
-cfg.setdefault("https_port", 8788)
+cfg.setdefault("https_port", int("$HTTPS_DEFAULT_PORT"))
 cfg.setdefault("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))
 cfg.setdefault("https_key_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-key.pem"))
 p.write_text(json.dumps(cfg, indent=2) + "\n")
@@ -285,6 +356,79 @@ try:
 except Exception:
     print("")
 PY
+}
+
+http_ports_json() {
+  python3 - <<PY
+import json, pathlib
+p = pathlib.Path("$HTTP_CONFIG_FILE")
+cfg = {}
+if p.exists():
+    try:
+        cfg = json.loads(p.read_text())
+    except Exception:
+        cfg = {}
+http_port = int(cfg.get("port") or int("$HTTP_DEFAULT_PORT"))
+https_port = int(cfg.get("https_port") or int("$HTTPS_DEFAULT_PORT"))
+print(json.dumps({"httpPort": http_port, "httpsPort": https_port}))
+PY
+}
+
+http_logs() {
+  local follow=0
+  local lines=200
+  local mode="console"
+  local output_file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --follow|-f)
+        follow=1
+        shift
+        ;;
+      --lines)
+        lines="${2:-}"
+        [[ "$lines" =~ ^[0-9]+$ ]] || { echo "Invalid --lines value: ${lines:-<empty>}"; exit 2; }
+        shift 2
+        ;;
+      --console)
+        mode="console"
+        shift
+        ;;
+      --file)
+        output_file="${2:-}"
+        [[ -n "$output_file" ]] || { echo "Missing value for --file"; exit 2; }
+        mode="file"
+        shift 2
+        ;;
+      *)
+        echo "Unknown option for http-logs: $1"
+        echo "Usage: pi-statusbar http-logs [--follow] [--lines N] [--console | --file <path>]"
+        exit 2
+        ;;
+    esac
+  done
+
+  if [[ ! -f "$HTTP_LOG_FILE" ]]; then
+    echo "HTTP daemon log file not found: $HTTP_LOG_FILE"
+    return 1
+  fi
+
+  if [[ "$mode" == "file" ]]; then
+    mkdir -p "$(dirname "$output_file")"
+    if [[ "$follow" -eq 1 ]]; then
+      tail -n "$lines" -f "$HTTP_LOG_FILE" | tee "$output_file"
+    else
+      tail -n "$lines" "$HTTP_LOG_FILE" | tee "$output_file" >/dev/null
+      echo "Wrote HTTP daemon logs to: $output_file"
+    fi
+  else
+    if [[ "$follow" -eq 1 ]]; then
+      tail -n "$lines" -f "$HTTP_LOG_FILE"
+    else
+      tail -n "$lines" "$HTTP_LOG_FILE"
+    fi
+  fi
 }
 
 daemon_terminal_get() {
@@ -551,12 +695,44 @@ high_level_remove() {
   daemon_service_uninstall || true
 }
 
+pretty_print_status_lines() {
+  local text="$1"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    case "$line" in
+      "registered: yes"*) echo "  ✅ ${line}" ;;
+      "registered: no"*) echo "  ❌ ${line}" ;;
+      "loaded: yes"*) echo "  ✅ ${line}" ;;
+      "loaded: no"*) echo "  ❌ ${line}" ;;
+      "daemon health: healthy"*) echo "  ✅ ${line}" ;;
+      "daemon health: unhealthy"*) echo "  ❌ ${line}" ;;
+      "app process: running"*) echo "  ✅ ${line}" ;;
+      "app process: not running"*) echo "  ❌ ${line}" ;;
+      "pi-statusd-http running"*) echo "  ✅ ${line}" ;;
+      "pi-statusd-http not running"*) echo "  ❌ ${line}" ;;
+      "http:"*) echo "  🔗 ${line}" ;;
+      "https:"*) echo "  🔒 ${line}" ;;
+      *) echo "  • ${line}" ;;
+    esac
+  done <<< "$text"
+}
+
 high_level_status() {
-  echo "== daemon =="
-  daemon_service_status || true
+  local daemon_out app_out http_out
+  daemon_out="$(daemon_service_status 2>/dev/null || true)"
+  app_out="$(app_status 2>/dev/null || true)"
+  http_out="$(http_status 2>/dev/null || true)"
+
+  echo "✨ Pi Status"
   echo
-  echo "== app =="
-  app_status || true
+  echo "🧠 Daemon"
+  pretty_print_status_lines "$daemon_out"
+  echo
+  echo "🖥️  App"
+  pretty_print_status_lines "$app_out"
+  echo
+  echo "🌐 HTTP Bridge"
+  pretty_print_status_lines "$http_out"
 }
 
 service_runner() {
@@ -583,10 +759,11 @@ service_runner() {
 
 show_help() {
   cat <<'EOF'
-Usage: pi-statusbar <command>
+Usage: pi-statusbar <command> [--http-port <port>] [--https-port <port>]
 
 Common:
   enable [--login yes|no]      Start daemon+HTTP+app now (default login=yes)
+                               Optional: --http-port <port> --https-port <port>
   stop [--remove yes|no]       Stop app + daemon service now
   remove                       Uninstall app/daemon LaunchAgents and stop processes
   status                       Show daemon service + app status
@@ -601,8 +778,11 @@ Daemon direct:
 
 HTTP bridge:
   http-start | http-stop | http-restart | http-status
+  (use --http-port/--https-port on start/restart/status/token to persist overrides)
   http-token [value]
   http-cert-fingerprint
+  http-ports
+  http-logs [--follow] [--lines N] [--console | --file <path>]
 
 Service management (advanced):
   daemon-service-install | daemon-service-start | daemon-service-stop
@@ -613,6 +793,23 @@ EOF
 
 assert_layout
 cmd="${1:-status}"
+shift || true
+PASSTHRU_ARGS=()
+
+case "$cmd" in
+  enable|daemon-service-install|daemon-service-start|daemon-service-restart|http-start|http-restart|http-status|http-token|http-cert-fingerprint|http-ports|http-logs|__service-runner)
+    parse_common_options "$@"
+    if ((${#PASSTHRU_ARGS[@]})); then
+      set -- "${PASSTHRU_ARGS[@]}"
+    else
+      set --
+    fi
+    apply_http_port_overrides
+    ;;
+  *)
+    set -- "$@"
+    ;;
+esac
 
 case "$cmd" in
   __service-runner)
@@ -620,7 +817,6 @@ case "$cmd" in
     ;;
 
   enable)
-    shift
     login_mode="yes"
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -636,7 +832,6 @@ case "$cmd" in
     ;;
 
   stop)
-    shift
     remove_mode="no"
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -662,25 +857,25 @@ case "$cmd" in
   daemon-status) daemon_status_raw ;;
   daemon-ping) python3 "$DAEMON" --request ping ;;
   daemon-latest)
-    if [[ $# -lt 2 ]]; then echo "Usage: pi-statusbar daemon-latest <pid>"; exit 2; fi
-    python3 "$DAEMON" --request "latest $2"
+    if [[ $# -lt 1 ]]; then echo "Usage: pi-statusbar daemon-latest <pid>"; exit 2; fi
+    python3 "$DAEMON" --request "latest $1"
     ;;
   daemon-send)
-    if [[ $# -lt 3 ]]; then echo "Usage: pi-statusbar daemon-send <pid> <message>"; exit 2; fi
-    pid="$2"; shift 2
+    if [[ $# -lt 2 ]]; then echo "Usage: pi-statusbar daemon-send <pid> <message>"; exit 2; fi
+    pid="$1"; shift
     python3 "$DAEMON" --request "send $pid $*"
     ;;
   daemon-watch)
-    if [[ $# -eq 1 ]]; then
+    if [[ $# -eq 0 ]]; then
       python3 "$DAEMON" --request "watch"
-    elif [[ $# -eq 2 ]]; then
-      python3 "$DAEMON" --request "watch $2"
+    elif [[ $# -eq 1 ]]; then
+      python3 "$DAEMON" --request "watch $1"
     else
-      python3 "$DAEMON" --request "watch $2 $3"
+      python3 "$DAEMON" --request "watch $1 $2"
     fi
     ;;
   daemon-terminal)
-    if [[ $# -ge 2 ]]; then daemon_terminal_set "$2"; else daemon_terminal_get; fi
+    if [[ $# -ge 1 ]]; then daemon_terminal_set "$1"; else daemon_terminal_get; fi
     ;;
 
   http-start) http_start ;;
@@ -688,9 +883,11 @@ case "$cmd" in
   http-restart) http_stop; http_start ;;
   http-status) http_status ;;
   http-token)
-    if [[ $# -ge 2 ]]; then http_token "$2"; else http_token; fi
+    if [[ $# -ge 1 ]]; then http_token "$1"; else http_token; fi
     ;;
   http-cert-fingerprint) http_cert_fingerprint ;;
+  http-ports) http_ports_json ;;
+  http-logs) http_logs "$@" ;;
 
   daemon-service-install) daemon_service_install ;;
   daemon-service-start) daemon_service_start ;;

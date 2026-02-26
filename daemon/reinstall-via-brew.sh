@@ -89,8 +89,33 @@ if [[ "$MODE" == "local" ]]; then
   # Ensure Homebrew uses the exact local working-copy formula (including uncommitted changes).
   TAP_REPO="$(brew --repo "$TAP_FULL")"
   mkdir -p "$TAP_REPO/Formula"
-  cp "$LOCAL_FORMULA" "$TAP_REPO/Formula/${FORMULA_NAME}.rb"
-  echo "==> Synced local formula into tap: $TAP_REPO/Formula/${FORMULA_NAME}.rb"
+  TAP_FORMULA="$TAP_REPO/Formula/${FORMULA_NAME}.rb"
+  cp "$LOCAL_FORMULA" "$TAP_FORMULA"
+  echo "==> Synced local formula into tap: $TAP_FORMULA"
+
+  # Build a local source tarball from the working tree and patch formula url/sha256 to it.
+  LOCAL_TARBALL="/tmp/${FORMULA_NAME}-local-$(date +%s).tar.gz"
+  tar \
+    --exclude='.git' \
+    --exclude='.build' \
+    --exclude='.swiftpm' \
+    --exclude='.DS_Store' \
+    -czf "$LOCAL_TARBALL" \
+    -C "$REPO_ROOT" .
+  LOCAL_SHA256="$(shasum -a 256 "$LOCAL_TARBALL" | awk '{print $1}')"
+
+  python3 - <<PY
+import pathlib, re
+formula = pathlib.Path(r"$TAP_FORMULA")
+text = formula.read_text()
+text = re.sub(r'^\s*url\s+"[^"]+"\s*$', '  url "file://$LOCAL_TARBALL"', text, flags=re.M)
+text = re.sub(r'^\s*sha256\s+"[^"]+"\s*$', '  sha256 "$LOCAL_SHA256"', text, flags=re.M)
+formula.write_text(text)
+PY
+
+  echo "==> Patched local tap formula to use working tree tarball"
+  echo "    url: file://$LOCAL_TARBALL"
+  echo "    sha256: $LOCAL_SHA256"
 else
   echo "==> Ensuring tap is available"
   brew tap "$TAP_FULL" >/dev/null

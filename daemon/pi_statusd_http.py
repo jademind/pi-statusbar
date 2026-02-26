@@ -21,6 +21,8 @@ SOCKET_PATH = Path.home() / ".pi" / "agent" / "statusd.sock"
 CONFIG_PATH = Path.home() / ".pi" / "agent" / "statusd-http.json"
 DEFAULT_CERT_PATH = Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"
 DEFAULT_KEY_PATH = Path.home() / ".pi" / "agent" / "statusd-http-key.pem"
+DEFAULT_HTTP_PORT = 8787
+DEFAULT_HTTPS_PORT = 8788
 
 
 def _expand_path(value: str | None, fallback: Path) -> Path:
@@ -41,7 +43,7 @@ def load_config() -> dict[str, Any]:
         cfg = {}
 
     host = os.environ.get("PI_STATUSD_HTTP_HOST", str(cfg.get("host") or "0.0.0.0"))
-    port = int(os.environ.get("PI_STATUSD_HTTP_PORT", str(cfg.get("port") or 8787)))
+    port = int(os.environ.get("PI_STATUSD_HTTP_PORT", str(cfg.get("port") or DEFAULT_HTTP_PORT)))
     token = os.environ.get("PI_STATUSD_HTTP_TOKEN", str(cfg.get("token") or "")).strip() or None
 
     cidr_raw = os.environ.get("PI_STATUSD_HTTP_ALLOW_CIDRS", "")
@@ -55,7 +57,7 @@ def load_config() -> dict[str, Any]:
 
     https_enabled = bool(cfg.get("https_enabled", True))
     https_host = str(cfg.get("https_host") or host)
-    https_port = int(cfg.get("https_port") or 8788)
+    https_port = int(cfg.get("https_port") or DEFAULT_HTTPS_PORT)
     https_cert_path = _expand_path(str(cfg.get("https_cert_path") or ""), DEFAULT_CERT_PATH)
     https_key_path = _expand_path(str(cfg.get("https_key_path") or ""), DEFAULT_KEY_PATH)
 
@@ -379,7 +381,7 @@ def main() -> None:
             cert_sha256 = cert_fingerprint_sha256(cert_path)
 
             https_host = str(cfg.get("https_host") or host)
-            https_port = int(cfg.get("https_port") or 8788)
+            https_port = int(cfg.get("https_port") or DEFAULT_HTTPS_PORT)
             httpsd = ThreadingHTTPServer((https_host, https_port), Handler)
             apply_shared_server_state(httpsd, cfg, cert_sha256)
 

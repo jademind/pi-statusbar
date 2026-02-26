@@ -130,9 +130,9 @@ daemon/pi-statusbar daemon-service-uninstall
   - `Jump`, `Refresh`, and `Collapse` controls
 - Falls back gracefully when telemetry is unavailable
 
-### Latest UI (v0.1.11)
+### Latest UI (v0.1.12)
 
-`pi-statusbar` is now the single unified CLI. It now includes daemon, HTTP bridge, and service/app lifecycle commands, and `enable` ensures the HTTP bridge is started (with cert fingerprint preflight) for consistent App Connect behavior.
+`pi-statusbar status` now includes a formatted multi-section view (Daemon/App/HTTP) with icons, HTTP ports are configurable via `--http-port`/`--https-port`, and `http-logs` can stream or export HTTP daemon logs for debugging. Local Homebrew reinstall now correctly installs from the current working tree.
 
 ![Pi Status Bar detail panel with rich HTML rendering](docs/screenshots/statusbar-detail-rich-html-2026-02-23.png)
 
@@ -440,6 +440,9 @@ HTTP bridge:
 - `http-status`
 - `http-token [value]`
 - `http-cert-fingerprint`
+- `http-ports`
+- `http-logs [--follow] [--lines N] [--console | --file <path>]`
+- Optional port overrides on relevant commands: `--http-port <port> --https-port <port>`
 
 Service management:
 
