@@ -9,6 +9,7 @@ import os
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 from collections import defaultdict, deque
@@ -134,6 +135,74 @@ def cert_fingerprint_sha256(cert_path: Path) -> str | None:
         return None
 
 
+def _agent_message_id(agent: dict[str, Any]) -> str | None:
+    text = str(agent.get("latest_message_full") or agent.get("latest_message") or "").strip()
+    at = str(agent.get("latest_message_at") or "").strip()
+    if not text and not at:
+        return None
+    raw = f"{agent.get('pid')}|{at}|{text}"
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _agent_fingerprint(agent: dict[str, Any]) -> str:
+    compact = {
+        "pid": agent.get("pid"),
+        "activity": agent.get("activity"),
+        "latest_message_id": agent.get("latest_message_id"),
+    }
+    return hashlib.sha1(json.dumps(compact, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _status_fingerprint(status: dict[str, Any]) -> str:
+    agents = status.get("agents") if isinstance(status, dict) else []
+    if not isinstance(agents, list):
+        agents = []
+    compact = []
+    for item in agents:
+        if not isinstance(item, dict):
+            continue
+        compact.append(
+            {
+                "pid": item.get("pid"),
+                "activity": item.get("activity"),
+                "latest_message_id": item.get("latest_message_id"),
+            }
+        )
+    compact.sort(key=lambda x: int(x.get("pid") or 0))
+    return hashlib.sha1(json.dumps(compact, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _normalize_status_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    out = dict(raw) if isinstance(raw, dict) else {"ok": False, "error": "invalid status payload"}
+    raw_agents = out.get("agents") if isinstance(out.get("agents"), list) else []
+    agents: list[dict[str, Any]] = []
+    for item in raw_agents:
+        if not isinstance(item, dict):
+            continue
+        a = dict(item)
+        a["latest_message_id"] = _agent_message_id(a)
+        agents.append(a)
+    out["agents"] = agents
+    out["fingerprint"] = _status_fingerprint(out)
+    return out
+
+
+def _find_agent(status: dict[str, Any], pid: int) -> dict[str, Any] | None:
+    agents = status.get("agents") if isinstance(status.get("agents"), list) else []
+    for item in agents:
+        if isinstance(item, dict) and int(item.get("pid") or 0) == pid:
+            return item
+    return None
+
+
+def _classify_agent_event(prev: dict[str, Any], curr: dict[str, Any]) -> str:
+    if prev.get("latest_message_id") != curr.get("latest_message_id"):
+        return "message_updated"
+    if prev.get("activity") != curr.get("activity"):
+        return "activity_changed"
+    return "agent_updated"
+
+
 class RateLimiter:
     def __init__(self, limit: int = 12) -> None:
         self.limit = limit
@@ -150,8 +219,23 @@ class RateLimiter:
         return True
 
 
+class SafeThreadingHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request: Any, client_address: tuple[str, int]) -> None:
+        _typ, err, _tb = sys.exc_info()
+        if isinstance(err, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError)):
+            print(f"[statusd-http] client disconnected {client_address[0]}:{client_address[1]} ({err.__class__.__name__})", flush=True)
+            return
+        if isinstance(err, ssl.SSLError):
+            msg = str(err).lower()
+            if "eof occurred" in msg or "tlsv1 alert" in msg or "wrong version number" in msg:
+                print(f"[statusd-http] tls disconnect {client_address[0]}:{client_address[1]} ({err})", flush=True)
+                return
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "pi-statusd-http/0.2"
+    server_version = "pi-statusd-http/0.3"
+    protocol_version = "HTTP/1.1"
 
     def _json(self, code: int, payload: dict[str, Any]) -> None:
         data = (json.dumps(payload) + "\n").encode("utf-8")
@@ -214,6 +298,176 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         print(f"[statusd-http] {self.address_string()} - {format % args}", flush=True)
 
+    def _parse_timeout_ms(self, query: dict[str, list[str]], default: int = 20000) -> int:
+        try:
+            raw = str((query.get("timeout_ms") or [str(default)])[0])
+            return max(250, min(60000, int(raw)))
+        except Exception:
+            return default
+
+    def _load_status(self) -> dict[str, Any]:
+        return _normalize_status_payload(request_socket("status"))
+
+    def _watch_global(self, query: dict[str, list[str]]) -> None:
+        timeout_ms = self._parse_timeout_ms(query, default=20000)
+        since = str((query.get("fingerprint") or [""])[0]).strip()
+
+        start_status = self._load_status()
+        start_fp = str(start_status.get("fingerprint") or "")
+
+        if not since:
+            self._json(200, {"ok": True, "event": "snapshot", "fingerprint": start_fp, "status": start_status})
+            return
+
+        if since != start_fp:
+            self._json(200, {"ok": True, "event": "out_of_sync", "fingerprint": start_fp, "status": start_status})
+            return
+
+        deadline = time.time() + (timeout_ms / 1000.0)
+        while time.time() < deadline:
+            time.sleep(0.6)
+            curr = self._load_status()
+            curr_fp = str(curr.get("fingerprint") or "")
+            if curr_fp != start_fp:
+                changes: list[dict[str, Any]] = []
+                prev_agents = {int(a.get("pid") or 0): a for a in (start_status.get("agents") or []) if isinstance(a, dict)}
+                curr_agents = {int(a.get("pid") or 0): a for a in (curr.get("agents") or []) if isinstance(a, dict)}
+
+                for pid, agent in curr_agents.items():
+                    before = prev_agents.get(pid)
+                    if before is None:
+                        changes.append({"event": "activity_changed", "pid": pid, "activity": agent.get("activity")})
+                        if agent.get("latest_message_id"):
+                            ev = {"event": "message_updated", "pid": pid, "latest_message_id": agent.get("latest_message_id")}
+                            if agent.get("latest_message"):
+                                ev["latest_message"] = agent.get("latest_message")
+                            changes.append(ev)
+                        continue
+                    if before.get("activity") != agent.get("activity"):
+                        changes.append({"event": "activity_changed", "pid": pid, "activity": agent.get("activity")})
+                    if before.get("latest_message_id") != agent.get("latest_message_id"):
+                        ev = {
+                            "event": "message_updated",
+                            "pid": pid,
+                            "latest_message_id": agent.get("latest_message_id"),
+                            "latest_message_at": agent.get("latest_message_at"),
+                        }
+                        if agent.get("latest_message"):
+                            ev["latest_message"] = agent.get("latest_message")
+                        changes.append(ev)
+
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "event": "status_changed",
+                        "fingerprint": curr_fp,
+                        "changes": changes,
+                        "status": curr,
+                    },
+                )
+                return
+
+        self._json(200, {"ok": True, "event": "timeout", "fingerprint": start_fp})
+
+    def _watch_pid_long_poll(self, pid: int, query: dict[str, list[str]]) -> None:
+        timeout_ms = self._parse_timeout_ms(query, default=20000)
+        since = str((query.get("fingerprint") or [""])[0]).strip()
+
+        status0 = self._load_status()
+        agent0 = _find_agent(status0, pid)
+        if not agent0:
+            self._json(404, {"ok": False, "error": "pid not found"})
+            return
+        fp0 = _agent_fingerprint(agent0)
+
+        if not since:
+            self._json(200, {"ok": True, "event": "snapshot", "pid": pid, "fingerprint": fp0, "agent": agent0})
+            return
+
+        if since != fp0:
+            self._json(200, {"ok": True, "event": "out_of_sync", "pid": pid, "fingerprint": fp0, "agent": agent0})
+            return
+
+        deadline = time.time() + (timeout_ms / 1000.0)
+        while time.time() < deadline:
+            time.sleep(0.6)
+            curr_status = self._load_status()
+            curr_agent = _find_agent(curr_status, pid)
+            if not curr_agent:
+                self._json(200, {"ok": True, "event": "agent_gone", "pid": pid})
+                return
+
+            curr_fp = _agent_fingerprint(curr_agent)
+            if curr_fp != fp0:
+                ev = _classify_agent_event(agent0, curr_agent)
+                self._json(200, {"ok": True, "event": ev, "pid": pid, "fingerprint": curr_fp, "agent": curr_agent})
+                return
+
+        self._json(200, {"ok": True, "event": "timeout", "pid": pid, "fingerprint": fp0})
+
+    def _watch_pid_sse(self, pid: int) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        seq = 0
+
+        def send_event(name: str, payload: dict[str, Any], event_id: str | None = None) -> None:
+            nonlocal seq
+            seq += 1
+            eid = event_id or f"{int(time.time() * 1000)}-{seq}"
+            blob = json.dumps(payload, separators=(",", ":"))
+            self.wfile.write(f"id: {eid}\n".encode("utf-8"))
+            self.wfile.write(f"event: {name}\n".encode("utf-8"))
+            self.wfile.write(f"data: {blob}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        status = self._load_status()
+        agent = _find_agent(status, pid)
+        if not agent:
+            send_event("error", {"ok": False, "error": "pid not found", "pid": pid}, event_id=f"{pid}:error")
+            return
+
+        prev = agent
+        prev_fp = _agent_fingerprint(prev)
+        current_id = f"{pid}:{prev_fp}"
+        last_event_id = (self.headers.get("Last-Event-ID", "") or "").strip()
+
+        # Resume-friendly bootstrap:
+        # - no Last-Event-ID  -> snapshot
+        # - same Last-Event-ID -> suppress duplicate snapshot and continue watching
+        # - different          -> out_of_sync with current snapshot payload
+        if not last_event_id:
+            send_event("snapshot", {"ok": True, "pid": pid, "fingerprint": prev_fp, "agent": prev}, event_id=current_id)
+        elif last_event_id != current_id:
+            send_event("out_of_sync", {"ok": True, "pid": pid, "fingerprint": prev_fp, "agent": prev}, event_id=current_id)
+
+        last_keepalive = time.time()
+        while True:
+            time.sleep(0.6)
+            try:
+                curr_status = self._load_status()
+                curr = _find_agent(curr_status, pid)
+                if not curr:
+                    send_event("agent_gone", {"ok": True, "pid": pid}, event_id=f"{pid}:gone")
+                    return
+                curr_fp = _agent_fingerprint(curr)
+                if curr_fp != prev_fp:
+                    ev = _classify_agent_event(prev, curr)
+                    send_event(ev, {"ok": True, "pid": pid, "fingerprint": curr_fp, "agent": curr}, event_id=f"{pid}:{curr_fp}")
+                    prev = curr
+                    prev_fp = curr_fp
+                if (time.time() - last_keepalive) > 15:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    last_keepalive = time.time()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
     def do_GET(self) -> None:
         if not self._require_auth():
             return
@@ -223,7 +477,7 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         if path == "" or path == "/":
-            self._json(200, {"ok": True, "service": "pi-statusd-http"})
+            self._json(200, {"ok": True, "service": "pi-statusd-http", "api_version": 3})
             return
 
         if path == "/health":
@@ -244,43 +498,41 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/status":
             try:
-                self._json(200, request_socket("status"))
+                self._json(200, self._load_status())
             except Exception as e:
                 self._json(502, {"ok": False, "error": f"daemon unavailable: {e}"})
             return
 
-        if path.startswith("/latest/"):
+        if path == "/watch":
+            try:
+                self._watch_global(query)
+            except Exception as e:
+                self._json(502, {"ok": False, "error": f"daemon unavailable: {e}"})
+            return
+
+        if path.startswith("/watch/"):
             pid_s = path.split("/")[-1]
             try:
                 pid = int(pid_s)
             except ValueError:
                 self._json(400, {"ok": False, "error": "invalid pid"})
                 return
+
+            wants_sse = "text/event-stream" in (self.headers.get("Accept", "").lower())
             try:
-                self._json(200, request_socket(f"latest {pid}"))
+                if wants_sse:
+                    self._watch_pid_sse(pid)
+                else:
+                    self._watch_pid_long_poll(pid, query)
             except Exception as e:
-                self._json(502, {"ok": False, "error": f"daemon unavailable: {e}"})
-            return
-
-        if path == "/watch":
-            timeout_ms = 20000
-            fingerprint = ""
-            if "timeout_ms" in query:
-                try:
-                    timeout_ms = max(250, min(60000, int(query.get("timeout_ms", ["20000"])[0])))
-                except Exception:
-                    timeout_ms = 20000
-            if "fingerprint" in query:
-                fingerprint = str(query.get("fingerprint", [""])[0])
-
-            cmd = "watch" if not fingerprint else f"watch {timeout_ms} {fingerprint}"
-            if not fingerprint:
-                cmd = f"watch {timeout_ms}"
-
-            try:
-                self._json(200, request_socket(cmd))
-            except Exception as e:
-                self._json(502, {"ok": False, "error": f"daemon unavailable: {e}"})
+                if wants_sse:
+                    try:
+                        self.wfile.write(f"event: error\ndata: {json.dumps({'ok': False, 'error': str(e)})}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                    except Exception:
+                        pass
+                else:
+                    self._json(502, {"ok": False, "error": f"daemon unavailable: {e}"})
             return
 
         self._json(404, {"ok": False, "error": "not found"})
@@ -363,7 +615,7 @@ def main() -> None:
     cert_sha256: str | None = None
 
     # HTTP endpoint (existing behavior)
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd = SafeThreadingHTTPServer((host, port), Handler)
     apply_shared_server_state(httpd, cfg, cert_sha256)
 
     print(
@@ -382,7 +634,7 @@ def main() -> None:
 
             https_host = str(cfg.get("https_host") or host)
             https_port = int(cfg.get("https_port") or DEFAULT_HTTPS_PORT)
-            httpsd = ThreadingHTTPServer((https_host, https_port), Handler)
+            httpsd = SafeThreadingHTTPServer((https_host, https_port), Handler)
             apply_shared_server_state(httpsd, cfg, cert_sha256)
 
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
