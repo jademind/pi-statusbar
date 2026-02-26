@@ -547,17 +547,19 @@ struct ContentView: View {
                     Button {
                         monitor.jump(to: agent)
                     } label: {
-                        Image(systemName: "arrow.up.right.square")
+                        Image(systemName: "location.viewfinder")
+                            .foregroundStyle(.secondary)
                     }
-                    .help("Jump")
+                    .help("Jump to this agent window")
                     .buttonStyle(.plain)
 
                     Button {
                         selectAgent(agent)
                     } label: {
                         Image(systemName: selected ? "message.fill" : "message")
+                            .foregroundStyle(.secondary)
                     }
-                    .help("Message")
+                    .help("Open talk/send panel")
                     .buttonStyle(.plain)
                 }
 
@@ -584,9 +586,14 @@ struct ContentView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(contextStatusColor(agent))
                         .lineLimit(1)
+                        .padding(.bottom, 3)
                 }
 
-                Text("Latest: \(latestMessageGist(agent))")
+                (
+                    Text("Latest:")
+                        .underline()
+                    + Text(" \(latestMessageGist(agent))")
+                )
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -596,6 +603,9 @@ struct ContentView: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+        .onTapGesture {
+            selectAgent(agent)
+        }
     }
 
     private func setSendFeedback(_ feedback: SendFeedback?, autoHideAfter seconds: TimeInterval? = nil) {
@@ -840,31 +850,36 @@ struct ContentView: View {
             //Divider()
 
             HStack {
-                Text("Refresh: 2s")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    monitor.refresh()
-                } label: {
-                    Label("Refresh now", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
+                HStack(spacing: 6) {
+                    Button {
+                        monitor.refresh()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(.secondary)
+                    }
+                    .help("Refresh now")
+                    .buttonStyle(.plain)
 
-                Button {
-                    showAppConnectWindow()
-                } label: {
-                    Label("App Connect", systemImage: "gearshape")
+                    Button {
+                        showAppConnectWindow()
+                    } label: {
+                        Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+                            .foregroundStyle(.secondary)
+                    }
+                    .help("App Connect")
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.borderless)
+
+                Spacer()
 
                 Button {
                     NSApp.terminate(nil)
                 } label: {
-                    Label("Quit", systemImage: "power")
-                        .foregroundStyle(.red)
+                    Image(systemName: "power")
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderless)
+                .help("Quit")
+                .buttonStyle(.plain)
             }
         }
         .padding(12)
