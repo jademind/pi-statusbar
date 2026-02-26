@@ -130,9 +130,9 @@ daemon/statusd-service uninstall
   - `Jump`, `Refresh`, and `Collapse` controls
 - Falls back gracefully when telemetry is unavailable
 
-### Latest UI (v0.1.2)
+### Latest UI (v0.1.9)
 
-The detail panel now renders telemetry HTML in a sandboxed WebView with improved typography, list spacing, and heading layout.
+App Connect now preflights and waits briefly for HTTPS certificate fingerprint availability on first run, improving iOS pairing UX while preserving secure TLS pinning guidance.
 
 ![Pi Status Bar detail panel with rich HTML rendering](docs/screenshots/statusbar-detail-rich-html-2026-02-23.png)
 

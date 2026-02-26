@@ -947,6 +947,10 @@ enum AppConnectError: LocalizedError {
 enum AppConnectPayloadProvider {
     static func build() -> Result<AppConnectPayload, AppConnectError> {
         _ = runCommand("daemon/statusdctl http-token")
+
+        // Preflight fingerprint check before starting HTTP bridge (helps first-run UX).
+        let preStartFingerprint = certFingerprint()
+
         _ = runCommand("daemon/statusdctl http-start >/dev/null 2>&1 || true")
 
         let token = runCommand("daemon/statusdctl http-token")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -957,8 +961,7 @@ enum AppConnectPayloadProvider {
         let host = resolveHost()
         let httpsBaseURL = "https://\(host):8788"
         let httpBaseURL = "http://\(host):8787"
-        let tlsCertSHA256 = runCommand("daemon/statusdctl http-cert-fingerprint")?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let tlsCertSHA256 = preStartFingerprint ?? waitForCertFingerprint()
 
         let preferred = (tlsCertSHA256?.isEmpty == false) ? httpsBaseURL : httpBaseURL
 
@@ -970,6 +973,25 @@ enum AppConnectPayloadProvider {
                 tlsCertSHA256: tlsCertSHA256?.isEmpty == false ? tlsCertSHA256 : nil
             )
         )
+    }
+
+    private static func certFingerprint() -> String? {
+        let value = runCommand("daemon/statusdctl http-cert-fingerprint")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value, !value.isEmpty else { return nil }
+        return value
+    }
+
+    private static func waitForCertFingerprint(attempts: Int = 8, delaySeconds: Double = 0.25) -> String? {
+        for attempt in 0..<max(1, attempts) {
+            if let fp = certFingerprint() {
+                return fp
+            }
+            if attempt < attempts - 1 {
+                Thread.sleep(forTimeInterval: delaySeconds)
+            }
+        }
+        return nil
     }
 
     private static func resolveHost() -> String {
