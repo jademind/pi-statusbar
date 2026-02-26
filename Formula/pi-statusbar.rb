@@ -35,11 +35,11 @@ class PiStatusbar < Formula
 
   def caveats
     <<~EOS
-      Quick setup (start now + enable at login):
-        pi-statusbar enable
+      Quick setup (start now + start at login):
+        pi-statusbar start
 
       Start now only (no login autostart):
-        pi-statusbar enable --login no
+        pi-statusbar start --login no
 
       Stop now:
         pi-statusbar stop

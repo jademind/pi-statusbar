@@ -324,16 +324,16 @@ brew install --HEAD jademind/tap/pi-statusbar
 
 ### Start after install (recommended)
 
-One-command setup (start now + enable at login):
+One-command setup (start now + start at login):
 
 ```bash
-pi-statusbar enable
+pi-statusbar start
 ```
 
 Start now only (no login autostart):
 
 ```bash
-pi-statusbar enable --login no
+pi-statusbar start --login no
 ```
 
 Verify:
@@ -414,7 +414,7 @@ swift build
 
 Common commands:
 
-- `enable [--login yes|no]`
+- `start [--login yes|no]`
 - `stop [--remove yes|no]`
 - `remove`
 - `status`

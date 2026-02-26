@@ -672,11 +672,11 @@ run_now_no_login() {
   fi
 }
 
-enable_with_login() {
+start_with_login() {
   daemon_service_install
   daemon_service_start
 
-  # Ensure HTTP bridge is up as part of unified enable flow.
+  # Ensure HTTP bridge is up as part of unified start flow.
   http_token >/dev/null 2>&1 || true
   http_cert_fingerprint >/dev/null 2>&1 || true
   http_start >/dev/null 2>&1 || true
@@ -762,7 +762,7 @@ show_help() {
 Usage: pi-statusbar <command> [--http-port <port>] [--https-port <port>]
 
 Common:
-  enable [--login yes|no]      Start daemon+HTTP+app now (default login=yes)
+  start [--login yes|no]       Start daemon+HTTP+app now (default login=yes)
                                Optional: --http-port <port> --https-port <port>
   stop [--remove yes|no]       Stop app + daemon service now
   remove                       Uninstall app/daemon LaunchAgents and stop processes
@@ -797,7 +797,7 @@ shift || true
 PASSTHRU_ARGS=()
 
 case "$cmd" in
-  enable|daemon-service-install|daemon-service-start|daemon-service-restart|http-start|http-restart|http-status|http-token|http-cert-fingerprint|http-ports|http-logs|__service-runner)
+  start|enable|daemon-service-install|daemon-service-start|daemon-service-restart|http-start|http-restart|http-status|http-token|http-cert-fingerprint|http-ports|http-logs|__service-runner)
     parse_common_options "$@"
     if ((${#PASSTHRU_ARGS[@]})); then
       set -- "${PASSTHRU_ARGS[@]}"
@@ -816,7 +816,10 @@ case "$cmd" in
     service_runner
     ;;
 
-  enable)
+  start|enable)
+    if [[ "$cmd" == "enable" ]]; then
+      echo "Warning: 'enable' is deprecated; use 'start' instead." >&2
+    fi
     login_mode="yes"
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -825,7 +828,7 @@ case "$cmd" in
       esac
     done
     case "$(printf '%s' "$login_mode" | tr '[:upper:]' '[:lower:]')" in
-      yes|true|1) enable_with_login ;;
+      yes|true|1) start_with_login ;;
       no|false|0) run_now_no_login ;;
       *) echo "Invalid value for --login: $login_mode (use yes|no)"; exit 2 ;;
     esac
