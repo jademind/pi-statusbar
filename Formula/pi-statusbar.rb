@@ -4,6 +4,7 @@ class PiStatusbar < Formula
   url "https://github.com/jademind/pi-statusbar/archive/refs/tags/v0.1.7.tar.gz"
   sha256 "29a8c75968105e7b0aa0b5f72e67c5ad1de6c033c60e727031b189e80fdd0117"
   version "0.1.7"
+  revision 1
   license "MIT"
   head "https://github.com/jademind/pi-statusbar.git", branch: "main"
 
@@ -14,11 +15,10 @@ class PiStatusbar < Formula
   def install
     libexec.install Dir["*"]
 
-    (bin/"PiStatusBar").write <<~EOS
-      #!/usr/bin/env bash
-      set -euo pipefail
-      exec swift run --package-path "#{opt_libexec}" PiStatusBar "$@"
-    EOS
+    cd libexec do
+      system "swift", "build", "-c", "release", "--product", "PiStatusBar"
+      bin.install ".build/release/PiStatusBar"
+    end
 
     (bin/"statusdctl").write_env_script libexec/"daemon/statusdctl", PI_STATUSBAR_ROOT: libexec
     (bin/"statusd-service").write_env_script libexec/"daemon/statusd-service", PI_STATUSBAR_ROOT: libexec

@@ -15,6 +15,28 @@ if [[ ! -x "$STATUSD_SERVICE" || ! -x "$APP_SERVICE" || ! -x "$STATUSDCTL" ]]; t
   exit 1
 fi
 
+resolve_app_binary() {
+  local app_bin
+
+  app_bin="$(command -v PiStatusBar || true)"
+  if [[ -n "$app_bin" ]]; then
+    echo "$app_bin"
+    return 0
+  fi
+
+  if [[ -x "$ROOT_DIR/.build/release/PiStatusBar" ]]; then
+    echo "$ROOT_DIR/.build/release/PiStatusBar"
+    return 0
+  fi
+
+  if [[ -x "$ROOT_DIR/.build/debug/PiStatusBar" ]]; then
+    echo "$ROOT_DIR/.build/debug/PiStatusBar"
+    return 0
+  fi
+
+  echo ""
+}
+
 run_now_no_login() {
   "$STATUSDCTL" ensure
 
@@ -23,14 +45,22 @@ run_now_no_login() {
     return 0
   fi
 
-  nohup PiStatusBar >/dev/null 2>&1 &
+  local app_bin
+  app_bin="$(resolve_app_binary)"
+  if [[ -z "$app_bin" ]]; then
+    echo "Could not find compiled PiStatusBar binary."
+    echo "For Homebrew installs, ensure PiStatusBar is in PATH."
+    echo "For local repo usage, build once first: swift build -c release --product PiStatusBar"
+    exit 1
+  fi
+
+  nohup "$app_bin" >/dev/null 2>&1 &
   sleep 0.2
 
   if pgrep -x PiStatusBar >/dev/null 2>&1 || pgrep -f "swift.*PiStatusBar" >/dev/null 2>&1; then
     echo "Started PiStatusBar"
   else
-    echo "Could not start PiStatusBar from PATH."
-    echo "If you're in a repo checkout, run: swift run PiStatusBar"
+    echo "Could not start PiStatusBar (attempted: $app_bin)"
     exit 1
   fi
 }

@@ -29,6 +29,11 @@ resolve_program_arguments() {
     return 0
   fi
 
+  if [[ -x "$ROOT_DIR/.build/release/PiStatusBar" ]]; then
+    echo "$ROOT_DIR/.build/release/PiStatusBar"
+    return 0
+  fi
+
   if [[ -x "$ROOT_DIR/.build/debug/PiStatusBar" ]]; then
     echo "$ROOT_DIR/.build/debug/PiStatusBar"
     return 0
@@ -41,8 +46,13 @@ install_plist() {
   local app_bin
   app_bin="$(resolve_program_arguments)"
 
-  if [[ -n "$app_bin" ]]; then
-    cat > "$PLIST_PATH" <<EOF
+  if [[ -z "$app_bin" ]]; then
+    echo "Could not find a compiled PiStatusBar binary."
+    echo "Install via Homebrew or build first with: swift build -c release --product PiStatusBar"
+    exit 1
+  fi
+
+  cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -76,47 +86,6 @@ install_plist() {
   </dict>
 </plist>
 EOF
-  else
-    cat > "$PLIST_PATH" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>$LABEL</string>
-
-    <key>ProgramArguments</key>
-    <array>
-      <string>/usr/bin/env</string>
-      <string>swift</string>
-      <string>run</string>
-      <string>--package-path</string>
-      <string>$ROOT_DIR</string>
-      <string>PiStatusBar</string>
-    </array>
-
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <false/>
-
-    <key>WorkingDirectory</key>
-    <string>$ROOT_DIR</string>
-
-    <key>StandardOutPath</key>
-    <string>$LOG_FILE</string>
-    <key>StandardErrorPath</key>
-    <string>$LOG_FILE</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-      <key>PI_STATUSBAR_ROOT</key>
-      <string>$ROOT_DIR</string>
-    </dict>
-  </dict>
-</plist>
-EOF
-  fi
 
   chmod 0644 "$PLIST_PATH"
   echo "Installed LaunchAgent plist: $PLIST_PATH"
