@@ -42,8 +42,8 @@
 ### Verification
 - [ ] `brew update`
 - [ ] `brew install` or `brew upgrade jademind/tap/pi-statusbar` works
-- [ ] `statusbar-setup enable` works
-- [ ] `statusbar-setup status` healthy
+- [ ] `pi-statusbar enable` works
+- [ ] `pi-statusbar status` healthy
 - [ ] `statusd-service status` healthy
 - [ ] `statusdctl ping` healthy
 - [ ] `statusbar-app-service status` healthy
@@ -66,7 +66,7 @@
 ### Verification
 - [ ] `brew update`
 - [ ] `brew upgrade jademind/tap/pi-statusbar` works
-- [ ] `statusbar-setup status` healthy
+- [ ] `pi-statusbar status` healthy
 - [ ] `statusdctl ping` healthy
 
 ---

@@ -23,7 +23,7 @@ class PiStatusbar < Formula
     (bin/"statusdctl").write_env_script libexec/"daemon/statusdctl", PI_STATUSBAR_ROOT: libexec
     (bin/"statusd-service").write_env_script libexec/"daemon/statusd-service", PI_STATUSBAR_ROOT: libexec
     (bin/"statusbar-app-service").write_env_script libexec/"daemon/statusbar-app-service", PI_STATUSBAR_ROOT: libexec
-    (bin/"statusbar-setup").write_env_script libexec/"daemon/statusbar-setup", PI_STATUSBAR_ROOT: libexec
+    (bin/"pi-statusbar").write_env_script libexec/"daemon/pi-statusbar", PI_STATUSBAR_ROOT: libexec
   end
 
   service do
@@ -41,19 +41,19 @@ class PiStatusbar < Formula
   def caveats
     <<~EOS
       Quick setup (start now + enable at login):
-        statusbar-setup enable
+        pi-statusbar enable
 
       Start now only (no login autostart):
-        statusbar-setup enable --login no
+        pi-statusbar enable --login no
 
       Stop now:
-        statusbar-setup stop
+        pi-statusbar stop
 
       Stop and remove login autostart:
-        statusbar-setup stop --remove yes
+        pi-statusbar stop --remove yes
 
       Verify:
-        statusbar-setup status
+        pi-statusbar status
     EOS
   end
 

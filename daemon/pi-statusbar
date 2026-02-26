@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR_DEFAULT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="${PI_STATUSBAR_ROOT:-$ROOT_DIR_DEFAULT}"
+CLI_NAME="$(basename "$0")"
 
 STATUSD_SERVICE="$ROOT_DIR/daemon/statusd-service"
 APP_SERVICE="$ROOT_DIR/daemon/statusbar-app-service"
@@ -91,8 +92,8 @@ show_status() {
 }
 
 show_help() {
-  cat <<'EOF'
-Usage: statusbar-setup <command> [options]
+  cat <<EOF
+Usage: $CLI_NAME <command> [options]
 
 Commands:
   enable [--login yes|no]   Start daemon + app now. Default login=yes.
@@ -106,11 +107,11 @@ Commands:
   status                    Show daemon/app registered + running state.
 
 Examples:
-  statusbar-setup enable
-  statusbar-setup enable --login no
-  statusbar-setup stop
-  statusbar-setup stop --remove yes
-  statusbar-setup remove
+  $CLI_NAME enable
+  $CLI_NAME enable --login no
+  $CLI_NAME stop
+  $CLI_NAME stop --remove yes
+  $CLI_NAME remove
 EOF
 }
 

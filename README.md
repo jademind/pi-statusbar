@@ -130,9 +130,9 @@ daemon/statusd-service uninstall
   - `Jump`, `Refresh`, and `Collapse` controls
 - Falls back gracefully when telemetry is unavailable
 
-### Latest UI (v0.1.9)
+### Latest UI (v0.1.10)
 
-App Connect now preflights and waits briefly for HTTPS certificate fingerprint availability on first run, improving iOS pairing UX while preserving secure TLS pinning guidance.
+The setup CLI is now `pi-statusbar` (replacing `statusbar-setup`) for consistent naming with the app and package.
 
 ![Pi Status Bar detail panel with rich HTML rendering](docs/screenshots/statusbar-detail-rich-html-2026-02-23.png)
 
@@ -268,7 +268,7 @@ This installs:
 - `statusdctl` (daemon control)
 - `statusd-service` (daemon LaunchAgent management)
 - `statusbar-app-service` (menu bar app LaunchAgent management)
-- `statusbar-setup` (one-command helper for enable/stop/remove flows)
+- `pi-statusbar` (one-command helper for enable/stop/remove flows)
 
 ### Start daemon via brew service (optional)
 
@@ -330,36 +330,36 @@ brew install --HEAD jademind/tap/pi-statusbar
 One-command setup (start now + enable at login):
 
 ```bash
-statusbar-setup enable
+pi-statusbar enable
 ```
 
 Start now only (no login autostart):
 
 ```bash
-statusbar-setup enable --login no
+pi-statusbar enable --login no
 ```
 
 Verify:
 
 ```bash
-statusbar-setup status
+pi-statusbar status
 ```
 
 > Why not auto-start during `brew install`?
-> Homebrew formulas should not silently start background services or register user LaunchAgents without explicit user consent. `statusbar-setup` keeps this explicit while minimizing setup friction.
+> Homebrew formulas should not silently start background services or register user LaunchAgents without explicit user consent. `pi-statusbar` keeps this explicit while minimizing setup friction.
 
 ### Stop / disable / remove
 
 Stop now (keep login settings):
 
 ```bash
-statusbar-setup stop
+pi-statusbar stop
 ```
 
 Stop now + remove login autostart:
 
 ```bash
-statusbar-setup stop --remove yes
+pi-statusbar stop --remove yes
 ```
 
 Remove package:
@@ -456,7 +456,7 @@ swift build
 - no args: restart daemon + app, then verify daemon health
 - `--bridge`: same as above, plus `pi install npm:@jademind/pi-bridge`
 
-`daemon/statusbar-setup` supports:
+`daemon/pi-statusbar` supports:
 
 - `enable [--login yes|no]`
 - `stop [--remove yes|no]`

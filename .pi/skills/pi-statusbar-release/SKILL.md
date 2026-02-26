@@ -12,7 +12,7 @@ Use this skill when releasing `pi-statusbar` (daemon + app + Homebrew distributi
 This skill covers:
 - source releases in `jademind/pi-statusbar`
 - Homebrew formula updates in this repo and `jademind/homebrew-tap`
-- install/startup verification (`statusbar-setup`, `statusdctl`, services)
+- install/startup verification (`pi-statusbar`, `statusdctl`, services)
 
 See full checklist: [RELEASE-CHECKLIST.md](./RELEASE-CHECKLIST.md)
 After selecting a mode, execute only that mode’s checklist section and treat every unchecked item as a release blocker.
@@ -92,8 +92,8 @@ shasum -a 256 /tmp/pi-statusbar-vX.Y.Z.tar.gz
 ```bash
 brew update
 brew upgrade jademind/tap/pi-statusbar || brew install jademind/tap/pi-statusbar
-statusbar-setup enable
-statusbar-setup status
+pi-statusbar enable
+pi-statusbar status
 statusd-service status
 statusdctl ping
 statusbar-app-service status
@@ -142,7 +142,7 @@ brew upgrade jademind/tap/pi-statusbar || brew install jademind/tap/pi-statusbar
 ## Must-Pass Checks Before Announcing Release
 
 - `brew install jademind/tap/pi-statusbar` succeeds
-- `statusbar-setup enable` succeeds
+- `pi-statusbar enable` succeeds
 - menu bar icon appears quickly (no runtime `swift run` compile path)
 - `statusdctl ping` returns healthy response
 - `statusbar-app-service status` shows registered/loaded/running

@@ -101,8 +101,8 @@ if is_installed; then
 
   # Best-effort stop for both Homebrew service and user LaunchAgents.
   brew services stop "$FORMULA_NAME" >/dev/null 2>&1 || true
-  if command -v statusbar-setup >/dev/null 2>&1; then
-    statusbar-setup stop --remove yes >/dev/null 2>&1 || true
+  if command -v pi-statusbar >/dev/null 2>&1; then
+    pi-statusbar stop --remove yes >/dev/null 2>&1 || true
   fi
 
   deps=()
