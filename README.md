@@ -11,7 +11,7 @@ This repository contains:
 
 ## Version
 
-Latest tagged release: **0.1.14**
+Latest tagged release: **0.1.15**
 
 ---
 
@@ -130,9 +130,9 @@ daemon/pi-statusbar daemon-service-uninstall
   - `Jump`, `Refresh`, and `Collapse` controls
 - Falls back gracefully when telemetry is unavailable
 
-### Latest UI (v0.1.14)
+### Latest UI (v0.1.15)
 
-`pi-statusbar status` now includes a formatted multi-section view (Daemon/App/HTTP) with icons, HTTP ports are configurable via `--http-port`/`--https-port`, and `http-logs` can stream or export HTTP daemon logs for debugging. Local Homebrew reinstall now correctly installs from the current working tree.
+Telemetry discovery now prefers the canonical `~/.pi/agent/telemetry/instances` path (with backward-compatible fallback), restoring model metadata and latest assistant messages in the menu UI. `pi-statusbar status` continues to provide a formatted multi-section view (Daemon/App/HTTP), configurable HTTP ports via `--http-port`/`--https-port`, and `http-logs` streaming/export support.
 
 ![Pi Status Bar detail panel with rich HTML rendering](docs/screenshots/statusbar-detail-rich-html-2026-02-23.png)
 

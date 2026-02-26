@@ -236,13 +236,20 @@ class Scanner:
         return agents
 
     def _read_pi_telemetry_instances(self) -> List[Dict]:
-        telemetry_dir = Path(os.environ.get("PI_TELEMETRY_DIR", str(Path.home() / ".pi-statubar" / "telemetry" / "instances")))
+        configured_dir = os.environ.get("PI_TELEMETRY_DIR", "").strip()
+        telemetry_dirs = [Path(configured_dir)] if configured_dir else [
+            Path.home() / ".pi" / "agent" / "telemetry" / "instances",
+            Path.home() / ".pi-statubar" / "telemetry" / "instances",
+        ]
         stale_ms = int(os.environ.get("PI_TELEMETRY_STALE_MS", "10000"))
         now_ms = int(time.time() * 1000)
 
-        instances: List[Dict] = []
+        by_pid: Dict[int, Dict] = {}
 
-        if telemetry_dir.exists():
+        for telemetry_dir in telemetry_dirs:
+            if not telemetry_dir.exists():
+                continue
+
             for file in telemetry_dir.glob("*.json"):
                 try:
                     data = json.loads(file.read_text())
@@ -265,10 +272,13 @@ class Scanner:
                 if now_ms - int(updated_at) > stale_ms:
                     continue
 
-                instances.append(data)
+                prev = by_pid.get(pid)
+                prev_updated = (prev or {}).get("process", {}).get("updatedAt") if isinstance(prev, dict) else None
+                if not isinstance(prev_updated, (int, float)) or int(updated_at) >= int(prev_updated):
+                    by_pid[pid] = data
 
-        if instances:
-            return instances
+        if by_pid:
+            return list(by_pid.values())
 
         # Optional fallback to CLI if available.
         try:
