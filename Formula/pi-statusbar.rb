@@ -4,6 +4,7 @@ class PiStatusbar < Formula
   url "https://github.com/jademind/pi-statusbar/archive/refs/tags/v0.1.8.tar.gz"
   sha256 "33b91647ee4f7b615ff8b7bd7d9bd9a97b35e80c66007da51cdb5676152a225e"
   version "0.1.8"
+  revision 1
   license "MIT"
   head "https://github.com/jademind/pi-statusbar.git", branch: "main"
 
@@ -13,6 +14,7 @@ class PiStatusbar < Formula
 
   def install
     libexec.install Dir["*"]
+    ENV["SWIFTPM_DISABLE_SANDBOX"] = "1"
 
     cd libexec do
       system "swift", "build", "-c", "release", "--product", "PiStatusBar"
