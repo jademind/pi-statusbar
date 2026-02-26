@@ -1096,7 +1096,7 @@ return "no"
                 continue
             if "/var/folders/" in low and "screenshot" in low:
                 continue
-            if "daemon/statusdctl" in low or "swift run pistatusbar" in low:
+            if "daemon/pi-statusbar" in low or "swift run pistatusbar" in low:
                 continue
             if low.startswith(("edit ", "write ", "read ", "bash ", "rg ", "find ", "python3 ")):
                 continue
@@ -1140,7 +1140,7 @@ return "no"
         low = text.lower().strip()
         tool_markers = (
             "edit ", "write ", "read ", "bash ", "rg ", "find ", "python3 ",
-            "daemon/statusdctl", "swift build", "processes:", "stderr:", "stdout:",
+            "daemon/pi-statusbar", "swift build", "processes:", "stderr:", "stdout:",
             "recipient_name", "tool_uses", "json.tool", "command exited with code",
         )
         if any(marker in low for marker in tool_markers):

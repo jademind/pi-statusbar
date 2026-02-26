@@ -20,17 +20,12 @@ class PiStatusbar < Formula
       bin.install ".build/release/PiStatusBar"
     end
 
-    (bin/"statusdctl").write_env_script libexec/"daemon/statusdctl", PI_STATUSBAR_ROOT: libexec
-    (bin/"statusd-service").write_env_script libexec/"daemon/statusd-service", PI_STATUSBAR_ROOT: libexec
-    (bin/"statusbar-app-service").write_env_script libexec/"daemon/statusbar-app-service", PI_STATUSBAR_ROOT: libexec
     (bin/"pi-statusbar").write_env_script libexec/"daemon/pi-statusbar", PI_STATUSBAR_ROOT: libexec
   end
 
   service do
-    run [
-      Formula["python@3.12"].opt_bin/"python3.12",
-      opt_libexec/"daemon/pi_statusd.py"
-    ]
+    run [opt_libexec/"daemon/pi-statusbar", "__service-runner"]
+    environment_variables PI_STATUSBAR_PYTHON: Formula["python@3.12"].opt_bin/"python3.12"
     keep_alive true
     run_type :immediate
     working_dir var
@@ -58,7 +53,7 @@ class PiStatusbar < Formula
   end
 
   test do
-    output = shell_output("#{bin}/statusdctl status 2>&1", 1)
+    output = shell_output("#{bin}/pi-statusbar daemon-status 2>&1", 1)
     assert_match "pi-statusd", output
   end
 end

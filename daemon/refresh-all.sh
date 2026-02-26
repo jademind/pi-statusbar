@@ -42,13 +42,13 @@ done
 echo "[1/4] Restarting pi-statusd cleanly..."
 pkill -f "daemon/pi_statusd.py" 2>/dev/null || true
 sleep 0.4
-"$ROOT_DIR/daemon/statusdctl" start
+"$ROOT_DIR/daemon/pi-statusbar" daemon-start
 
 echo "[2/4] Checking daemon health..."
-"$ROOT_DIR/daemon/statusdctl" status
+"$ROOT_DIR/daemon/pi-statusbar" daemon-status
 
 echo "[3/4] Restarting status bar app..."
-"$ROOT_DIR/daemon/statusbar-app-service" restart
+"$ROOT_DIR/daemon/pi-statusbar" app-restart
 
 if [[ "$INSTALL_BRIDGE" -eq 1 ]]; then
   echo "[4/4] Installing latest published pi-bridge package..."

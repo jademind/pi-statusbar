@@ -4,42 +4,506 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR_DEFAULT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="${PI_STATUSBAR_ROOT:-$ROOT_DIR_DEFAULT}"
-CLI_NAME="$(basename "$0")"
 
-STATUSD_SERVICE="$ROOT_DIR/daemon/statusd-service"
-APP_SERVICE="$ROOT_DIR/daemon/statusbar-app-service"
-STATUSDCTL="$ROOT_DIR/daemon/statusdctl"
-
-if [[ ! -x "$STATUSD_SERVICE" || ! -x "$APP_SERVICE" || ! -x "$STATUSDCTL" ]]; then
-  echo "Could not locate required scripts under: $ROOT_DIR/daemon"
-  echo "Set PI_STATUSBAR_ROOT to your pi-statusbar repo/install root."
-  exit 1
+if [[ ! -f "$ROOT_DIR/daemon/pi_statusd.py" ]]; then
+  if [[ -f "$SCRIPT_DIR/pi_statusd.py" ]]; then
+    ROOT_DIR="$SCRIPT_DIR/.."
+  elif [[ -f "$SCRIPT_DIR/../libexec/pi-statusbar/daemon/pi_statusd.py" ]]; then
+    ROOT_DIR="$SCRIPT_DIR/../libexec/pi-statusbar"
+  fi
 fi
 
+DAEMON="$ROOT_DIR/daemon/pi_statusd.py"
+HTTP_DAEMON="$ROOT_DIR/daemon/pi_statusd_http.py"
+STATE_DIR="$HOME/.pi/agent"
+PID_FILE="$STATE_DIR/statusd.pid"
+LOG_FILE="$STATE_DIR/statusd.log"
+SOCKET_FILE="$STATE_DIR/statusd.sock"
+CONFIG_FILE="$STATE_DIR/statusd.json"
+
+HTTP_PID_FILE="$STATE_DIR/statusd-http.pid"
+HTTP_LOG_FILE="$STATE_DIR/statusd-http.log"
+HTTP_CONFIG_FILE="$STATE_DIR/statusd-http.json"
+
+LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+DAEMON_PLIST_PATH="$LAUNCH_AGENTS_DIR/dev.jademind.pi-statusd.plist"
+DAEMON_LABEL="dev.jademind.pi-statusd"
+APP_PLIST_PATH="$LAUNCH_AGENTS_DIR/dev.jademind.PiStatusBar.plist"
+APP_LABEL="dev.jademind.PiStatusBar"
+APP_LOG_FILE="$STATE_DIR/PiStatusBar.log"
+
+mkdir -p "$STATE_DIR" "$LAUNCH_AGENTS_DIR"
+
+assert_layout() {
+  if [[ ! -f "$DAEMON" ]]; then
+    echo "Could not locate daemon script: $DAEMON"
+    echo "Set PI_STATUSBAR_ROOT to your repo/install root (contains daemon/pi_statusd.py)."
+    exit 1
+  fi
+  if [[ ! -f "$HTTP_DAEMON" ]]; then
+    echo "Could not locate HTTP daemon script: $HTTP_DAEMON"
+    echo "Set PI_STATUSBAR_ROOT to your repo/install root (contains daemon/pi_statusd_http.py)."
+    exit 1
+  fi
+}
+
+service_target() {
+  echo "gui/$(id -u)"
+}
+
+is_label_loaded() {
+  local label="$1"
+  launchctl print "$(service_target)/$label" >/dev/null 2>&1
+}
+
+# -------- daemon process control --------
+is_running() {
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+find_pid_fallback() { pgrep -f "daemon/pi_statusd.py" | head -n1 || true; }
+find_all_pids() { pgrep -f "daemon/pi_statusd.py" || true; }
+
+is_http_running() {
+  if [[ -f "$HTTP_PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$HTTP_PID_FILE" 2>/dev/null || true)"
+    if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+find_http_pid_fallback() { pgrep -f "daemon/pi_statusd_http.py" | head -n1 || true; }
+find_all_http_pids() { pgrep -f "daemon/pi_statusd_http.py" || true; }
+
+daemon_start() {
+  if is_running; then
+    echo "pi-statusd already running (pid $(cat "$PID_FILE"))."
+    return 0
+  fi
+
+  local fallback_pid
+  fallback_pid="$(find_pid_fallback)"
+  if [[ -n "$fallback_pid" ]] && kill -0 "$fallback_pid" 2>/dev/null; then
+    echo "$fallback_pid" > "$PID_FILE"
+    echo "pi-statusd already running (pid $fallback_pid)."
+    return 0
+  fi
+
+  nohup python3 "$DAEMON" >> "$LOG_FILE" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$PID_FILE"
+  sleep 0.2
+
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Started pi-statusd (pid $pid)."
+  else
+    echo "Failed to start pi-statusd. Check $LOG_FILE"
+    exit 1
+  fi
+}
+
+daemon_stop() {
+  local pids
+  pids="$(find_all_pids)"
+
+  if [[ -z "$pids" ]]; then
+    echo "pi-statusd is not running."
+    rm -f "$PID_FILE" "$SOCKET_FILE"
+    return 0
+  fi
+
+  while IFS= read -r pid; do [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true; done <<< "$pids"
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    for _ in {1..20}; do ! kill -0 "$pid" 2>/dev/null && break; sleep 0.1; done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  done <<< "$pids"
+
+  rm -f "$PID_FILE" "$SOCKET_FILE"
+  echo "Stopped pi-statusd."
+}
+
+http_start() {
+  if is_http_running; then
+    echo "pi-statusd-http already running (pid $(cat "$HTTP_PID_FILE"))."
+    return 0
+  fi
+
+  local fallback_pid
+  fallback_pid="$(find_http_pid_fallback)"
+  if [[ -n "$fallback_pid" ]] && kill -0 "$fallback_pid" 2>/dev/null; then
+    echo "$fallback_pid" > "$HTTP_PID_FILE"
+    echo "pi-statusd-http already running (pid $fallback_pid)."
+    return 0
+  fi
+
+  nohup python3 "$HTTP_DAEMON" >> "$HTTP_LOG_FILE" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$HTTP_PID_FILE"
+  sleep 0.2
+
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Started pi-statusd-http (pid $pid)."
+  else
+    echo "Failed to start pi-statusd-http. Check $HTTP_LOG_FILE"
+    exit 1
+  fi
+}
+
+http_stop() {
+  local pids
+  pids="$(find_all_http_pids)"
+
+  if [[ -z "$pids" ]]; then
+    echo "pi-statusd-http is not running."
+    rm -f "$HTTP_PID_FILE"
+    return 0
+  fi
+
+  while IFS= read -r pid; do [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true; done <<< "$pids"
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    for _ in {1..20}; do ! kill -0 "$pid" 2>/dev/null && break; sleep 0.1; done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  done <<< "$pids"
+
+  rm -f "$HTTP_PID_FILE"
+  echo "Stopped pi-statusd-http."
+}
+
+daemon_status_raw() {
+  if is_running; then
+    echo "pi-statusd running (pid $(cat "$PID_FILE"))"
+  else
+    local fallback_pid
+    fallback_pid="$(find_pid_fallback)"
+    if [[ -n "$fallback_pid" ]] && kill -0 "$fallback_pid" 2>/dev/null; then
+      echo "$fallback_pid" > "$PID_FILE"
+      echo "pi-statusd running (pid $fallback_pid)"
+    else
+      echo "pi-statusd not running"
+      return 1
+    fi
+  fi
+
+  if python3 "$DAEMON" --request ping >/dev/null 2>&1; then
+    echo "socket: healthy ($SOCKET_FILE)"
+  else
+    echo "socket: not responding"
+    return 1
+  fi
+}
+
+http_status() {
+  local ok=0
+  if is_http_running; then
+    echo "pi-statusd-http running (pid $(cat "$HTTP_PID_FILE"))"
+  else
+    echo "pi-statusd-http not running"
+    ok=1
+  fi
+
+  python3 - <<PY || ok=1
+import hashlib, json, pathlib, ssl
+p = pathlib.Path("$HTTP_CONFIG_FILE")
+cfg = {}
+if p.exists():
+    try: cfg = json.loads(p.read_text())
+    except Exception: cfg = {}
+host = cfg.get("host", "0.0.0.0")
+port = cfg.get("port", 8787)
+token = cfg.get("token", "")
+https_enabled = bool(cfg.get("https_enabled", True))
+https_host = cfg.get("https_host", host)
+https_port = cfg.get("https_port", 8788)
+cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))).expanduser()
+fp = "unavailable"
+if cert_path.exists():
+    try:
+        pem = cert_path.read_text(); der = ssl.PEM_cert_to_DER_cert(pem)
+        h = hashlib.sha256(der).hexdigest().upper(); fp = ":".join(h[i:i+2] for i in range(0, len(h), 2))
+    except Exception:
+        fp = "invalid-cert"
+print(f"http:  {host}:{port} token={'set' if token else 'unset'}")
+print(f"https: {https_host}:{https_port} enabled={'yes' if https_enabled else 'no'} cert={cert_path} sha256={fp}")
+PY
+
+  return "$ok"
+}
+
+http_token() {
+  local token="${1:-}"
+  python3 - <<PY
+import json, pathlib, secrets
+p = pathlib.Path("$HTTP_CONFIG_FILE")
+p.parent.mkdir(parents=True, exist_ok=True)
+try: cfg = json.loads(p.read_text()) if p.exists() else {}
+except Exception: cfg = {}
+tok = "$token".strip()
+if not tok:
+    tok = str(cfg.get("token") or "").strip() or secrets.token_urlsafe(24)
+cfg["token"] = tok
+cfg.setdefault("host", "0.0.0.0")
+cfg.setdefault("port", 8787)
+cfg.setdefault("allow_loopback_unauth", True)
+cfg.setdefault("https_enabled", True)
+cfg.setdefault("https_host", cfg.get("host", "0.0.0.0"))
+cfg.setdefault("https_port", 8788)
+cfg.setdefault("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))
+cfg.setdefault("https_key_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-key.pem"))
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+print(tok)
+PY
+}
+
+http_cert_fingerprint() {
+  python3 - <<PY
+import hashlib, json, pathlib, ssl
+p = pathlib.Path("$HTTP_CONFIG_FILE")
+cfg = {}
+if p.exists():
+    try: cfg = json.loads(p.read_text())
+    except Exception: cfg = {}
+cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))).expanduser()
+if not cert_path.exists():
+    print("")
+    raise SystemExit(0)
+try:
+    pem = cert_path.read_text(); der = ssl.PEM_cert_to_DER_cert(pem)
+    h = hashlib.sha256(der).hexdigest().upper()
+    print(":".join(h[i:i+2] for i in range(0, len(h), 2)))
+except Exception:
+    print("")
+PY
+}
+
+daemon_terminal_get() {
+  python3 - <<PY
+import json, pathlib
+p = pathlib.Path("$CONFIG_FILE")
+if not p.exists(): print("auto")
+else:
+    try: cfg = json.loads(p.read_text())
+    except Exception: cfg = {}
+    print(cfg.get("terminal", "auto"))
+PY
+}
+
+daemon_terminal_set() {
+  local val="${1:-auto}"
+  local low
+  low="$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')"
+  case "$low" in
+    auto|system|default) val="auto" ;;
+    ghostty) val="Ghostty" ;;
+    iterm2|iterm) val="iTerm2" ;;
+    terminal) val="Terminal" ;;
+    *) echo "Invalid terminal: $val"; echo "Valid values: auto, Ghostty, iTerm2, Terminal"; exit 2 ;;
+  esac
+
+  python3 - <<PY
+import json, pathlib
+p = pathlib.Path("$CONFIG_FILE")
+p.parent.mkdir(parents=True, exist_ok=True)
+try: cfg = json.loads(p.read_text()) if p.exists() else {}
+except Exception: cfg = {}
+cfg["terminal"] = "$val"
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+print("terminal set to:", cfg["terminal"])
+PY
+}
+
+daemon_ensure() {
+  if ! is_running; then daemon_start; fi
+  if python3 "$DAEMON" --request ping >/dev/null 2>&1; then
+    echo "pi-statusd ready"
+    return 0
+  fi
+  echo "pi-statusd started but socket is not ready yet"
+  return 1
+}
+
+# -------- app service control --------
 resolve_app_binary() {
   local app_bin
-
   app_bin="$(command -v PiStatusBar || true)"
-  if [[ -n "$app_bin" ]]; then
-    echo "$app_bin"
-    return 0
-  fi
-
-  if [[ -x "$ROOT_DIR/.build/release/PiStatusBar" ]]; then
-    echo "$ROOT_DIR/.build/release/PiStatusBar"
-    return 0
-  fi
-
-  if [[ -x "$ROOT_DIR/.build/debug/PiStatusBar" ]]; then
-    echo "$ROOT_DIR/.build/debug/PiStatusBar"
-    return 0
-  fi
-
+  if [[ -n "$app_bin" ]]; then echo "$app_bin"; return 0; fi
+  if [[ -x "$ROOT_DIR/.build/release/PiStatusBar" ]]; then echo "$ROOT_DIR/.build/release/PiStatusBar"; return 0; fi
+  if [[ -x "$ROOT_DIR/.build/debug/PiStatusBar" ]]; then echo "$ROOT_DIR/.build/debug/PiStatusBar"; return 0; fi
   echo ""
 }
 
+app_install() {
+  local app_bin
+  app_bin="$(resolve_app_binary)"
+  if [[ -z "$app_bin" ]]; then
+    echo "Could not find a compiled PiStatusBar binary."
+    echo "Install via Homebrew or build first with: swift build -c release --product PiStatusBar"
+    exit 1
+  fi
+
+  cat > "$APP_PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$APP_LABEL</string>
+  <key>ProgramArguments</key><array><string>$app_bin</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><false/>
+  <key>WorkingDirectory</key><string>$ROOT_DIR</string>
+  <key>StandardOutPath</key><string>$APP_LOG_FILE</string>
+  <key>StandardErrorPath</key><string>$APP_LOG_FILE</string>
+  <key>EnvironmentVariables</key><dict><key>PI_STATUSBAR_ROOT</key><string>$ROOT_DIR</string></dict>
+</dict></plist>
+EOF
+  chmod 0644 "$APP_PLIST_PATH"
+  echo "Installed LaunchAgent plist: $APP_PLIST_PATH"
+}
+
+app_start() {
+  app_install
+  if is_label_loaded "$APP_LABEL"; then
+    launchctl kickstart -k "$(service_target)/$APP_LABEL"
+    echo "Restarted $APP_LABEL"
+  else
+    launchctl bootstrap "$(service_target)" "$APP_PLIST_PATH"
+    echo "Started $APP_LABEL"
+  fi
+}
+
+app_stop() {
+  if is_label_loaded "$APP_LABEL"; then
+    launchctl bootout "$(service_target)/$APP_LABEL" >/dev/null 2>&1 || true
+    echo "Stopped $APP_LABEL"
+  else
+    echo "$APP_LABEL is not loaded"
+  fi
+  pkill -f "PiStatusBar" >/dev/null 2>&1 || true
+}
+
+app_status() {
+  local rc=0
+  [[ -f "$APP_PLIST_PATH" ]] && echo "registered: yes ($APP_PLIST_PATH)" || { echo "registered: no"; rc=1; }
+  if is_label_loaded "$APP_LABEL"; then
+    local pid
+    pid="$(launchctl print "$(service_target)/$APP_LABEL" 2>/dev/null | awk -F'= ' '/pid =/{print $2; exit}' | tr -d ';')"
+    [[ -n "$pid" && "$pid" != "0" ]] && echo "loaded: yes (pid $pid)" || echo "loaded: yes"
+  else
+    echo "loaded: no"; rc=1
+  fi
+  if pgrep -x PiStatusBar >/dev/null 2>&1 || pgrep -f "swift.*PiStatusBar" >/dev/null 2>&1; then
+    echo "app process: running"
+  else
+    echo "app process: not running"; rc=1
+  fi
+  return "$rc"
+}
+
+app_uninstall() { app_stop; rm -f "$APP_PLIST_PATH"; echo "Removed LaunchAgent plist: $APP_PLIST_PATH"; }
+
+# -------- daemon LaunchAgent (service) --------
+daemon_service_install() {
+  cat > "$DAEMON_PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$DAEMON_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$ROOT_DIR/daemon/pi-statusbar</string>
+    <string>__service-runner</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>WorkingDirectory</key><string>$ROOT_DIR</string>
+  <key>StandardOutPath</key><string>$LOG_FILE</string>
+  <key>StandardErrorPath</key><string>$LOG_FILE</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+    <key>PI_STATUSBAR_ROOT</key><string>$ROOT_DIR</string>
+    <key>PI_STATUSBAR_PYTHON</key><string>python3</string>
+  </dict>
+</dict></plist>
+EOF
+  chmod 0644 "$DAEMON_PLIST_PATH"
+  echo "Installed LaunchAgent plist: $DAEMON_PLIST_PATH"
+}
+
+daemon_service_start() {
+  daemon_service_install
+  if is_label_loaded "$DAEMON_LABEL"; then
+    launchctl kickstart -k "$(service_target)/$DAEMON_LABEL"
+    echo "Restarted $DAEMON_LABEL"
+  else
+    launchctl bootstrap "$(service_target)" "$DAEMON_PLIST_PATH"
+    echo "Started $DAEMON_LABEL"
+  fi
+
+  if daemon_ensure >/dev/null 2>&1; then
+    echo "pi-statusd is healthy"
+  else
+    echo "pi-statusd failed health check; inspect $LOG_FILE"
+    exit 1
+  fi
+}
+
+daemon_service_stop() {
+  if is_label_loaded "$DAEMON_LABEL"; then
+    launchctl bootout "$(service_target)/$DAEMON_LABEL" >/dev/null 2>&1 || true
+    echo "Stopped $DAEMON_LABEL"
+  else
+    echo "$DAEMON_LABEL is not loaded"
+  fi
+  daemon_stop >/dev/null 2>&1 || true
+  http_stop >/dev/null 2>&1 || true
+}
+
+daemon_service_status() {
+  local rc=0
+  [[ -f "$DAEMON_PLIST_PATH" ]] && echo "registered: yes ($DAEMON_PLIST_PATH)" || { echo "registered: no"; rc=1; }
+  if is_label_loaded "$DAEMON_LABEL"; then
+    local pid
+    pid="$(launchctl print "$(service_target)/$DAEMON_LABEL" 2>/dev/null | awk -F'= ' '/pid =/{print $2; exit}' | tr -d ';')"
+    [[ -n "$pid" && "$pid" != "0" ]] && echo "loaded: yes (pid $pid)" || echo "loaded: yes"
+  else
+    echo "loaded: no"; rc=1
+  fi
+  if daemon_status_raw >/dev/null 2>&1; then
+    echo "daemon health: healthy"
+  else
+    echo "daemon health: unhealthy"; rc=1
+  fi
+  return "$rc"
+}
+
+daemon_service_doctor() {
+  daemon_service_status || true
+  echo
+  echo "--- launchctl (tail) ---"
+  launchctl print "$(service_target)/$DAEMON_LABEL" 2>/dev/null | tail -n 30 || true
+  echo
+  echo "--- statusd log (tail) ---"
+  tail -n 30 "$LOG_FILE" 2>/dev/null || true
+}
+
+daemon_service_uninstall() { daemon_service_stop; rm -f "$DAEMON_PLIST_PATH"; echo "Removed LaunchAgent plist: $DAEMON_PLIST_PATH"; }
+
+# -------- high level --------
 run_now_no_login() {
-  "$STATUSDCTL" ensure
+  daemon_ensure
+  http_token >/dev/null 2>&1 || true
+  http_start >/dev/null 2>&1 || true
 
   if pgrep -x PiStatusBar >/dev/null 2>&1 || pgrep -f "swift.*PiStatusBar" >/dev/null 2>&1; then
     echo "PiStatusBar already running"
@@ -54,10 +518,8 @@ run_now_no_login() {
     echo "For local repo usage, build once first: swift build -c release --product PiStatusBar"
     exit 1
   fi
-
   nohup "$app_bin" >/dev/null 2>&1 &
   sleep 0.2
-
   if pgrep -x PiStatusBar >/dev/null 2>&1 || pgrep -f "swift.*PiStatusBar" >/dev/null 2>&1; then
     echo "Started PiStatusBar"
   else
@@ -67,133 +529,188 @@ run_now_no_login() {
 }
 
 enable_with_login() {
-  "$STATUSD_SERVICE" install
-  "$STATUSD_SERVICE" start
-  "$APP_SERVICE" install
-  "$APP_SERVICE" start
+  daemon_service_install
+  daemon_service_start
+
+  # Ensure HTTP bridge is up as part of unified enable flow.
+  http_token >/dev/null 2>&1 || true
+  http_cert_fingerprint >/dev/null 2>&1 || true
+  http_start >/dev/null 2>&1 || true
+
+  app_install
+  app_start
 }
 
-stop_now() {
-  "$APP_SERVICE" stop || true
-  "$STATUSD_SERVICE" stop || true
+high_level_stop() {
+  app_stop || true
+  daemon_service_stop || true
 }
 
-remove_login_autostart() {
-  "$APP_SERVICE" uninstall || true
-  "$STATUSD_SERVICE" uninstall || true
+high_level_remove() {
+  app_uninstall || true
+  daemon_service_uninstall || true
 }
 
-show_status() {
+high_level_status() {
   echo "== daemon =="
-  "$STATUSD_SERVICE" status || true
+  daemon_service_status || true
   echo
   echo "== app =="
-  "$APP_SERVICE" status || true
+  app_status || true
+}
+
+service_runner() {
+  local py="${PI_STATUSBAR_PYTHON:-python3}"
+  cleanup() { http_stop >/dev/null 2>&1 || true; }
+  terminate() {
+    if [[ -n "${MAIN_PID:-}" ]] && kill -0 "$MAIN_PID" 2>/dev/null; then
+      kill "$MAIN_PID" 2>/dev/null || true
+      wait "$MAIN_PID" 2>/dev/null || true
+    fi
+    cleanup
+    exit 0
+  }
+  trap terminate INT TERM
+  trap cleanup EXIT
+
+  http_token >/dev/null 2>&1 || true
+  http_start >/dev/null 2>&1 || true
+
+  "$py" "$DAEMON" &
+  MAIN_PID=$!
+  wait "$MAIN_PID"
 }
 
 show_help() {
-  cat <<EOF
-Usage: $CLI_NAME <command> [options]
+  cat <<'EOF'
+Usage: pi-statusbar <command>
 
-Commands:
-  enable [--login yes|no]   Start daemon + app now. Default login=yes.
-                            --login yes: install LaunchAgents and start now.
-                            --login no: start now only, no LaunchAgent changes.
+Common:
+  enable [--login yes|no]      Start daemon+HTTP+app now (default login=yes)
+  stop [--remove yes|no]       Stop app + daemon service now
+  remove                       Uninstall app/daemon LaunchAgents and stop processes
+  status                       Show daemon service + app status
 
-  stop [--remove yes|no]    Stop daemon + app now. Default remove=no.
-                            --remove yes: also uninstall LaunchAgents.
+Daemon direct:
+  daemon-start | daemon-stop | daemon-restart | daemon-ensure | daemon-status
+  daemon-ping
+  daemon-latest <pid>
+  daemon-send <pid> <message>
+  daemon-watch [timeout_ms] [fingerprint]
+  daemon-terminal [auto|Ghostty|iTerm2|Terminal]
 
-  remove                    Uninstall LaunchAgents and stop both components.
-  status                    Show daemon/app registered + running state.
+HTTP bridge:
+  http-start | http-stop | http-restart | http-status
+  http-token [value]
+  http-cert-fingerprint
 
-Examples:
-  $CLI_NAME enable
-  $CLI_NAME enable --login no
-  $CLI_NAME stop
-  $CLI_NAME stop --remove yes
-  $CLI_NAME remove
+Service management (advanced):
+  daemon-service-install | daemon-service-start | daemon-service-stop
+  daemon-service-restart | daemon-service-status | daemon-service-doctor | daemon-service-uninstall
+  app-install | app-start | app-stop | app-restart | app-status | app-uninstall
 EOF
 }
 
+assert_layout
 cmd="${1:-status}"
-shift || true
 
 case "$cmd" in
+  __service-runner)
+    service_runner
+    ;;
+
   enable)
+    shift
     login_mode="yes"
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --login)
-          login_mode="${2:-yes}"
-          shift 2
-          ;;
-        *)
-          echo "Unknown option: $1"
-          show_help
-          exit 2
-          ;;
+        --login) login_mode="${2:-yes}"; shift 2 ;;
+        *) echo "Unknown option: $1"; show_help; exit 2 ;;
       esac
     done
-
     case "$(printf '%s' "$login_mode" | tr '[:upper:]' '[:lower:]')" in
-      yes|true|1)
-        enable_with_login
-        ;;
-      no|false|0)
-        run_now_no_login
-        ;;
-      *)
-        echo "Invalid value for --login: $login_mode (use yes|no)"
-        exit 2
-        ;;
+      yes|true|1) enable_with_login ;;
+      no|false|0) run_now_no_login ;;
+      *) echo "Invalid value for --login: $login_mode (use yes|no)"; exit 2 ;;
     esac
     ;;
 
   stop)
+    shift
     remove_mode="no"
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --remove)
-          remove_mode="${2:-no}"
-          shift 2
-          ;;
-        *)
-          echo "Unknown option: $1"
-          show_help
-          exit 2
-          ;;
+        --remove) remove_mode="${2:-no}"; shift 2 ;;
+        *) echo "Unknown option: $1"; show_help; exit 2 ;;
       esac
     done
-
-    stop_now
-
+    high_level_stop
     case "$(printf '%s' "$remove_mode" | tr '[:upper:]' '[:lower:]')" in
-      yes|true|1)
-        remove_login_autostart
-        ;;
-      no|false|0)
-        ;;
-      *)
-        echo "Invalid value for --remove: $remove_mode (use yes|no)"
-        exit 2
-        ;;
+      yes|true|1) high_level_remove ;;
+      no|false|0) ;;
+      *) echo "Invalid value for --remove: $remove_mode (use yes|no)"; exit 2 ;;
     esac
     ;;
 
-  remove)
-    remove_login_autostart
+  remove) high_level_remove ;;
+  status) high_level_status ;;
+
+  daemon-start) daemon_start ;;
+  daemon-stop) daemon_stop ;;
+  daemon-restart) daemon_stop; daemon_start ;;
+  daemon-ensure) daemon_ensure ;;
+  daemon-status) daemon_status_raw ;;
+  daemon-ping) python3 "$DAEMON" --request ping ;;
+  daemon-latest)
+    if [[ $# -lt 2 ]]; then echo "Usage: pi-statusbar daemon-latest <pid>"; exit 2; fi
+    python3 "$DAEMON" --request "latest $2"
+    ;;
+  daemon-send)
+    if [[ $# -lt 3 ]]; then echo "Usage: pi-statusbar daemon-send <pid> <message>"; exit 2; fi
+    pid="$2"; shift 2
+    python3 "$DAEMON" --request "send $pid $*"
+    ;;
+  daemon-watch)
+    if [[ $# -eq 1 ]]; then
+      python3 "$DAEMON" --request "watch"
+    elif [[ $# -eq 2 ]]; then
+      python3 "$DAEMON" --request "watch $2"
+    else
+      python3 "$DAEMON" --request "watch $2 $3"
+    fi
+    ;;
+  daemon-terminal)
+    if [[ $# -ge 2 ]]; then daemon_terminal_set "$2"; else daemon_terminal_get; fi
     ;;
 
-  status)
-    show_status
+  http-start) http_start ;;
+  http-stop) http_stop ;;
+  http-restart) http_stop; http_start ;;
+  http-status) http_status ;;
+  http-token)
+    if [[ $# -ge 2 ]]; then http_token "$2"; else http_token; fi
     ;;
+  http-cert-fingerprint) http_cert_fingerprint ;;
+
+  daemon-service-install) daemon_service_install ;;
+  daemon-service-start) daemon_service_start ;;
+  daemon-service-stop) daemon_service_stop ;;
+  daemon-service-restart) daemon_service_stop; daemon_service_start ;;
+  daemon-service-status) daemon_service_status ;;
+  daemon-service-doctor) daemon_service_doctor ;;
+  daemon-service-uninstall) daemon_service_uninstall ;;
+
+  app-install) app_install ;;
+  app-start) app_start ;;
+  app-stop) app_stop ;;
+  app-restart) app_stop; app_start ;;
+  app-status) app_status ;;
+  app-uninstall) app_uninstall ;;
 
   -h|--help|help)
     show_help
     ;;
-
   *)
-    echo "Unknown command: $cmd"
     show_help
     exit 2
     ;;

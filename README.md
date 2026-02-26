@@ -40,10 +40,10 @@ swift build
 ### 3) Start the daemon
 
 ```bash
-daemon/statusdctl restart
-daemon/statusdctl ensure
-daemon/statusdctl status
-daemon/statusdctl ping
+daemon/pi-statusbar daemon-restart
+daemon/pi-statusbar daemon-ensure
+daemon/pi-statusbar daemon-status
+daemon/pi-statusbar daemon-ping
 ```
 
 Expected: `status` shows running daemon + healthy socket, and `ping` returns `{"ok": true, "pong": true, ...}`.
@@ -87,9 +87,9 @@ Then restart active Pi sessions and verify in each session:
 Use the LaunchAgent management script for clean startup/login behavior:
 
 ```bash
-daemon/statusd-service install
-daemon/statusd-service start
-daemon/statusd-service status
+daemon/pi-statusbar daemon-service-install
+daemon/pi-statusbar daemon-service-start
+daemon/pi-statusbar daemon-service-status
 ```
 
 It verifies:
@@ -101,9 +101,9 @@ It verifies:
 Useful commands:
 
 ```bash
-daemon/statusd-service restart
-daemon/statusd-service doctor
-daemon/statusd-service uninstall
+daemon/pi-statusbar daemon-service-restart
+daemon/pi-statusbar daemon-service-doctor
+daemon/pi-statusbar daemon-service-uninstall
 ```
 
 ---
@@ -130,9 +130,9 @@ daemon/statusd-service uninstall
   - `Jump`, `Refresh`, and `Collapse` controls
 - Falls back gracefully when telemetry is unavailable
 
-### Latest UI (v0.1.10)
+### Latest UI (v0.1.11)
 
-The setup CLI is now `pi-statusbar` (replacing `statusbar-setup`) for consistent naming with the app and package.
+`pi-statusbar` is now the single unified CLI. It now includes daemon, HTTP bridge, and service/app lifecycle commands, and `enable` ensures the HTTP bridge is started (with cert fingerprint preflight) for consistent App Connect behavior.
 
 ![Pi Status Bar detail panel with rich HTML rendering](docs/screenshots/statusbar-detail-rich-html-2026-02-23.png)
 
@@ -161,7 +161,7 @@ The setup CLI is now `pi-statusbar` (replacing `statusbar-setup`) for consistent
 ### Optional HTTP bridge (for iOS / remote clients)
 
 - Script: `daemon/pi_statusd_http.py`
-- Control via `daemon/statusdctl`:
+- Control via `daemon/pi-statusbar`:
   - `http-start`
   - `http-stop`
   - `http-restart`
@@ -265,10 +265,7 @@ brew install --HEAD ./Formula/pi-statusbar.rb
 This installs:
 
 - `PiStatusBar` (menu bar app launcher; first run compiles with Swift locally)
-- `statusdctl` (daemon control)
-- `statusd-service` (daemon LaunchAgent management)
-- `statusbar-app-service` (menu bar app LaunchAgent management)
-- `pi-statusbar` (one-command helper for enable/stop/remove flows)
+- `pi-statusbar` (single unified CLI for daemon control, HTTP bridge, LaunchAgents, and setup flows)
 
 ### Start daemon via brew service (optional)
 
@@ -280,21 +277,21 @@ brew services list | rg pi-statusbar
 Or use:
 
 ```bash
-statusd-service start
-statusd-service status
+pi-statusbar daemon-service-start
+pi-statusbar daemon-service-status
 ```
 
 ### Autostart menu bar app (optional)
 
 ```bash
-statusbar-app-service start
-statusbar-app-service status
+pi-statusbar app-start
+pi-statusbar app-status
 ```
 
 To disable app autostart:
 
 ```bash
-statusbar-app-service uninstall
+pi-statusbar app-uninstall
 ```
 
 ### Publish for other users (Homebrew tap)
@@ -375,14 +372,14 @@ brew uninstall jademind/tap/pi-statusbar
 ### Start / restart daemon
 
 ```bash
-daemon/statusdctl restart
+daemon/pi-statusbar daemon-restart
 ```
 
 ### Verify daemon health
 
 ```bash
-daemon/statusdctl status
-daemon/statusdctl ping
+daemon/pi-statusbar daemon-status
+daemon/pi-statusbar daemon-ping
 ```
 
 ### Run macOS status bar app
@@ -413,55 +410,46 @@ swift build
 
 ## Control script
 
-`daemon/statusdctl` supports:
+`daemon/pi-statusbar` is the single unified CLI.
 
-- `start`
-- `stop`
-- `restart`
-- `ensure`
-- `status`
-- `ping`
-- `latest <pid>`
-- `send <pid> <message>`
-- `watch [timeout_ms] [fingerprint]`
-- `terminal`
-- `terminal <auto|Ghostty|iTerm2|Terminal>`
-- `http-start`
-- `http-stop`
-- `http-restart`
-- `http-status`
-- `http-token [value]`
-
-`daemon/statusd-service` supports:
-
-- `install`
-- `uninstall`
-- `start`
-- `stop`
-- `restart`
-- `status`
-- `doctor`
-
-`daemon/statusbar-app-service` supports:
-
-- `install`
-- `start`
-- `stop`
-- `restart`
-- `status`
-- `uninstall`
-
-`daemon/refresh-all.sh` supports:
-
-- no args: restart daemon + app, then verify daemon health
-- `--bridge`: same as above, plus `pi install npm:@jademind/pi-bridge`
-
-`daemon/pi-statusbar` supports:
+Common commands:
 
 - `enable [--login yes|no]`
 - `stop [--remove yes|no]`
 - `remove`
 - `status`
+
+Daemon direct:
+
+- `daemon-start`
+- `daemon-stop`
+- `daemon-restart`
+- `daemon-ensure`
+- `daemon-status`
+- `daemon-ping`
+- `daemon-latest <pid>`
+- `daemon-send <pid> <message>`
+- `daemon-watch [timeout_ms] [fingerprint]`
+- `daemon-terminal [auto|Ghostty|iTerm2|Terminal]`
+
+HTTP bridge:
+
+- `http-start`
+- `http-stop`
+- `http-restart`
+- `http-status`
+- `http-token [value]`
+- `http-cert-fingerprint`
+
+Service management:
+
+- `daemon-service-install|start|stop|restart|status|doctor|uninstall`
+- `app-install|start|stop|restart|status|uninstall`
+
+`daemon/refresh-all.sh` supports:
+
+- no args: restart daemon + app, then verify daemon health
+- `--bridge`: same as above, plus `pi install npm:@jademind/pi-bridge`
 
 ---
 
@@ -487,8 +475,8 @@ swift build
 ### App shows `daemon: offline`
 
 ```bash
-daemon/statusdctl restart
-daemon/statusdctl status
+daemon/pi-statusbar daemon-restart
+daemon/pi-statusbar daemon-status
 ```
 
 If status is unhealthy, inspect `~/.pi/agent/statusd.log`.
@@ -511,8 +499,8 @@ If status is unhealthy, inspect `~/.pi/agent/statusd.log`.
 - Verify terminal preference via:
 
 ```bash
-daemon/statusdctl terminal
-daemon/statusdctl terminal Ghostty
+daemon/pi-statusbar daemon-terminal
+daemon/pi-statusbar daemon-terminal Ghostty
 ```
 
 ---
@@ -525,7 +513,7 @@ daemon/statusdctl terminal Ghostty
   1. tag `pi-statusbar` release
   2. update `Formula/pi-statusbar.rb` (`url`, `sha256`, `version`)
   3. update `jademind/homebrew-tap`
-  4. verify `brew install` + `brew services` + `statusbar-app-service status`
+  4. verify `brew install` + `brew services` + `pi-statusbar app-status`
 - Include clear migration notes when changing package names, command behavior, or service startup logic.
 
 ---

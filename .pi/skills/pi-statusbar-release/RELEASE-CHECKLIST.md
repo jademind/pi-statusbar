@@ -44,9 +44,9 @@
 - [ ] `brew install` or `brew upgrade jademind/tap/pi-statusbar` works
 - [ ] `pi-statusbar enable` works
 - [ ] `pi-statusbar status` healthy
-- [ ] `statusd-service status` healthy
-- [ ] `statusdctl ping` healthy
-- [ ] `statusbar-app-service status` healthy
+- [ ] `pi-statusbar daemon-service-status` healthy
+- [ ] `pi-statusbar daemon-ping` healthy
+- [ ] `pi-statusbar app-status` healthy
 - [ ] Menu bar icon appears quickly (no runtime compile delay)
 
 ---
@@ -67,7 +67,7 @@
 - [ ] `brew update`
 - [ ] `brew upgrade jademind/tap/pi-statusbar` works
 - [ ] `pi-statusbar status` healthy
-- [ ] `statusdctl ping` healthy
+- [ ] `pi-statusbar daemon-ping` healthy
 
 ---
 

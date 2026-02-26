@@ -961,14 +961,14 @@ enum AppConnectError: LocalizedError {
 
 enum AppConnectPayloadProvider {
     static func build() -> Result<AppConnectPayload, AppConnectError> {
-        _ = runCommand("daemon/statusdctl http-token")
+        _ = runCommand("daemon/pi-statusbar http-token")
 
         // Preflight fingerprint check before starting HTTP bridge (helps first-run UX).
         let preStartFingerprint = certFingerprint()
 
-        _ = runCommand("daemon/statusdctl http-start >/dev/null 2>&1 || true")
+        _ = runCommand("daemon/pi-statusbar http-start >/dev/null 2>&1 || true")
 
-        let token = runCommand("daemon/statusdctl http-token")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = runCommand("daemon/pi-statusbar http-token")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !token.isEmpty else {
             return .failure(.tokenUnavailable)
         }
@@ -991,7 +991,7 @@ enum AppConnectPayloadProvider {
     }
 
     private static func certFingerprint() -> String? {
-        let value = runCommand("daemon/statusdctl http-cert-fingerprint")?
+        let value = runCommand("daemon/pi-statusbar http-cert-fingerprint")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let value, !value.isEmpty else { return nil }
         return value
