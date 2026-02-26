@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 enum DaemonClient {
-    private static let socketPath = (NSHomeDirectory() as NSString).appendingPathComponent(".pi/agent/statusd.sock")
+    private static let socketPath = (NSHomeDirectory() as NSString).appendingPathComponent(".pi-statubar/statusd.sock")
 
     static func status() -> StatusResponse? {
         request("status", as: StatusResponse.self)

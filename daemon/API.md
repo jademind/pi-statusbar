@@ -14,7 +14,7 @@ This document describes the **current** HTTP bridge API exposed by `daemon/pi_st
 - HTTP: `http://<host>:<http_port>`
 - HTTPS: `https://<host>:<https_port>`
 
-Ports and token are configured via `~/.pi/agent/statusd-http.json` and controlled with:
+Ports and token are configured via `~/.pi-statubar/statusd-http.json` and controlled with:
 
 ```bash
 pi-statusbar http-token

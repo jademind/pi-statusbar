@@ -15,7 +15,7 @@ fi
 
 DAEMON="$ROOT_DIR/daemon/pi_statusd.py"
 HTTP_DAEMON="$ROOT_DIR/daemon/pi_statusd_http.py"
-STATE_DIR="$HOME/.pi/agent"
+STATE_DIR="$HOME/.pi-statubar"
 PID_FILE="$STATE_DIR/statusd.pid"
 LOG_FILE="$STATE_DIR/statusd.log"
 SOCKET_FILE="$STATE_DIR/statusd.sock"
@@ -297,7 +297,7 @@ token = cfg.get("token", "")
 https_enabled = bool(cfg.get("https_enabled", True))
 https_host = cfg.get("https_host", host)
 https_port = cfg.get("https_port", int("$HTTPS_DEFAULT_PORT"))
-cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))).expanduser()
+cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi-statubar" / "statusd-http-cert.pem"))).expanduser()
 fp = "unavailable"
 if cert_path.exists():
     try:
@@ -330,8 +330,8 @@ cfg.setdefault("allow_loopback_unauth", True)
 cfg.setdefault("https_enabled", True)
 cfg.setdefault("https_host", cfg.get("host", "0.0.0.0"))
 cfg.setdefault("https_port", int("$HTTPS_DEFAULT_PORT"))
-cfg.setdefault("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))
-cfg.setdefault("https_key_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-key.pem"))
+cfg.setdefault("https_cert_path", str(pathlib.Path.home() / ".pi-statubar" / "statusd-http-cert.pem"))
+cfg.setdefault("https_key_path", str(pathlib.Path.home() / ".pi-statubar" / "statusd-http-key.pem"))
 p.write_text(json.dumps(cfg, indent=2) + "\n")
 print(tok)
 PY
@@ -345,7 +345,7 @@ cfg = {}
 if p.exists():
     try: cfg = json.loads(p.read_text())
     except Exception: cfg = {}
-cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"))).expanduser()
+cert_path = pathlib.Path(cfg.get("https_cert_path", str(pathlib.Path.home() / ".pi-statubar" / "statusd-http-cert.pem"))).expanduser()
 if not cert_path.exists():
     print("")
     raise SystemExit(0)

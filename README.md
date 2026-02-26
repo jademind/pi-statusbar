@@ -11,7 +11,7 @@ This repository contains:
 
 ## Version
 
-Latest tagged release: **0.1.13**
+Latest tagged release: **0.1.14**
 
 ---
 
@@ -111,7 +111,7 @@ daemon/pi-statusbar daemon-service-uninstall
 ## Privacy and sensitive data
 
 - This README avoids machine-specific absolute paths and credentials.
-- Runtime data is stored locally under `~/.pi/agent`.
+- Runtime data is stored locally under `~/.pi-statubar`.
 - Do not commit local logs, telemetry dumps, or screenshots that expose private paths/session names.
 
 ## What it does
@@ -130,7 +130,7 @@ daemon/pi-statusbar daemon-service-uninstall
   - `Jump`, `Refresh`, and `Collapse` controls
 - Falls back gracefully when telemetry is unavailable
 
-### Latest UI (v0.1.13)
+### Latest UI (v0.1.14)
 
 `pi-statusbar status` now includes a formatted multi-section view (Daemon/App/HTTP) with icons, HTTP ports are configurable via `--http-port`/`--https-port`, and `http-logs` can stream or export HTTP daemon logs for debugging. Local Homebrew reinstall now correctly installs from the current working tree.
 
@@ -149,7 +149,7 @@ daemon/pi-statusbar daemon-service-uninstall
 
 ### 1) Daemon (`daemon/pi_statusd.py`)
 
-- Unix socket: `~/.pi/agent/statusd.sock`
+- Unix socket: `~/.pi-statubar/statusd.sock`
 - Commands:
   - `status`
   - `ping`
@@ -167,7 +167,7 @@ daemon/pi-statusbar daemon-service-uninstall
   - `http-restart`
   - `http-status`
   - `http-token [value]`
-- Config file: `~/.pi/agent/statusd-http.json`
+- Config file: `~/.pi-statubar/statusd-http.json`
 - Exposed endpoints:
   - `GET /status`
   - `GET /watch?timeout_ms=...&fingerprint=...`
@@ -211,7 +211,7 @@ When telemetry is unavailable, the row gracefully falls back to process-only met
 `pi-statusd` follows this data source strategy:
 
 1. **Primary:** per-process telemetry files at:
-   - `~/.pi/agent/telemetry/instances/*.json`
+   - `~/.pi-statubar/telemetry/instances/*.json`
 2. **Optional fallback:** `pi-telemetry-snapshot`
 3. **Final fallback:** process heuristics via `ps` + `lsof`
 
@@ -245,7 +245,7 @@ When `jump <pid>` is requested, the daemon uses this order:
 
 Terminal preference config:
 
-- Config file: `~/.pi/agent/statusd.json`
+- Config file: `~/.pi-statubar/statusd.json`
 - Env override: `PI_STATUS_TERMINAL`
 - Values: `auto | Ghostty | iTerm2 | Terminal`
 - Auto order: `Ghostty → iTerm2 → Terminal`
@@ -482,13 +482,13 @@ daemon/pi-statusbar daemon-restart
 daemon/pi-statusbar daemon-status
 ```
 
-If status is unhealthy, inspect `~/.pi/agent/statusd.log`.
+If status is unhealthy, inspect `~/.pi-statubar/statusd.log`.
 
 ### Source chip stays on `fallback`
 
 - Confirm telemetry is installed: `pi install npm:@jademind/pi-telemetry`
 - In an active Pi session run: `/pi-telemetry --data`
-- Ensure telemetry files exist under `~/.pi/agent/telemetry/instances`
+- Ensure telemetry files exist under `~/.pi-statubar/telemetry/instances`
 
 ### Row shows `shell` without session name
 

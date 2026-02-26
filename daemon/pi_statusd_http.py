@@ -18,10 +18,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-SOCKET_PATH = Path.home() / ".pi" / "agent" / "statusd.sock"
-CONFIG_PATH = Path.home() / ".pi" / "agent" / "statusd-http.json"
-DEFAULT_CERT_PATH = Path.home() / ".pi" / "agent" / "statusd-http-cert.pem"
-DEFAULT_KEY_PATH = Path.home() / ".pi" / "agent" / "statusd-http-key.pem"
+SOCKET_PATH = Path.home() / ".pi-statubar" / "statusd.sock"
+CONFIG_PATH = Path.home() / ".pi-statubar" / "statusd-http.json"
+DEFAULT_CERT_PATH = Path.home() / ".pi-statubar" / "statusd-http-cert.pem"
+DEFAULT_KEY_PATH = Path.home() / ".pi-statubar" / "statusd-http-key.pem"
 DEFAULT_HTTP_PORT = 8787
 DEFAULT_HTTPS_PORT = 8788
 

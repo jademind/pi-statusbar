@@ -17,7 +17,7 @@ enum SessionLocator {
         lastScan = Date()
 
         let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".pi/agent/sessions", isDirectory: true)
+            .appendingPathComponent(".pi-statubar/sessions", isDirectory: true)
 
         guard let enumerator = FileManager.default.enumerator(
             at: root,

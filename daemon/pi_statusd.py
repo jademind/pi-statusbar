@@ -20,8 +20,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List
 
-SOCKET_PATH = Path.home() / ".pi" / "agent" / "statusd.sock"
-CONFIG_PATH = Path.home() / ".pi" / "agent" / "statusd.json"
+SOCKET_PATH = Path.home() / ".pi-statubar" / "statusd.sock"
+CONFIG_PATH = Path.home() / ".pi-statubar" / "statusd.json"
 
 
 @dataclass
@@ -236,7 +236,7 @@ class Scanner:
         return agents
 
     def _read_pi_telemetry_instances(self) -> List[Dict]:
-        telemetry_dir = Path(os.environ.get("PI_TELEMETRY_DIR", str(Path.home() / ".pi" / "agent" / "telemetry" / "instances")))
+        telemetry_dir = Path(os.environ.get("PI_TELEMETRY_DIR", str(Path.home() / ".pi-statubar" / "telemetry" / "instances")))
         stale_ms = int(os.environ.get("PI_TELEMETRY_STALE_MS", "10000"))
         now_ms = int(time.time() * 1000)
 
@@ -307,7 +307,7 @@ class Scanner:
         configured = os.environ.get("PI_BRIDGE_DIR", "").strip()
         if configured:
             return Path(configured)
-        return Path.home() / ".pi" / "agent" / "statusbridge"
+        return Path.home() / ".pi-statubar" / "statusbridge"
 
     def _bridge_registry_for_pid(self, pid: int) -> Dict | None:
         registry_file = self._bridge_base_dir() / "registry" / f"{pid}.json"
