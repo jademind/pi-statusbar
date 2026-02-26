@@ -53,6 +53,28 @@ Use when changes are docs/tests/internal only and nothing user-installable chang
 
 ---
 
+## Commit Message Format (required)
+
+Use a **one-line subject** plus a **detailed body** for release-related commits.
+
+Template:
+
+```bash
+git commit \
+  -m "<short one-line subject>" \
+  -m "<detailed description: what changed, why, and any follow-up notes>"
+```
+
+Examples:
+
+```bash
+git commit \
+  -m "Release vX.Y.Z" \
+  -m "- Bump VERSION and README release marker\n- Update Formula URL/version/sha256 for vX.Y.Z\n- Prepare tag vX.Y.Z and release publication"
+```
+
+---
+
 ## A) New Upstream Version Release Procedure
 
 1. **Choose next version** `X.Y.Z` and update:
@@ -68,7 +90,9 @@ Use when changes are docs/tests/internal only and nothing user-installable chang
 3. **Commit + tag + push source release**
 ```bash
 git add VERSION README.md Formula/pi-statusbar.rb
-git commit -m "Release vX.Y.Z"
+git commit \
+  -m "Release vX.Y.Z" \
+  -m "- Bump VERSION and README release marker\n- Update Formula URL/version/sha256 for vX.Y.Z\n- Prepare source tag and Homebrew publication"
 git tag vX.Y.Z
 git push origin main --tags
 ```
@@ -114,9 +138,9 @@ Use when packaging changed but source tag is unchanged.
    - keep `version` + tarball `url` unchanged
    - increment `revision` (e.g. `revision 2`)
 
-2. Commit + push formula update in `jademind/pi-statusbar`.
+2. Commit + push formula update in `jademind/pi-statusbar` using the required commit format (one-line subject + detailed body).
 
-3. Mirror same revision bump in `jademind/homebrew-tap/Formula/pi-statusbar.rb`.
+3. Mirror same revision bump in `jademind/homebrew-tap/Formula/pi-statusbar.rb` and commit with the same format.
 
 4. Validate with:
 ```bash
@@ -130,7 +154,7 @@ brew upgrade jademind/tap/pi-statusbar
 
 1. Copy current canonical formula state into tap formula:
    - `jademind/pi-statusbar/Formula/pi-statusbar.rb` -> `jademind/homebrew-tap/Formula/pi-statusbar.rb`
-2. Commit + push tap repo.
+2. Commit + push tap repo using the required commit format (one-line subject + detailed body).
 3. Run:
 ```bash
 brew update

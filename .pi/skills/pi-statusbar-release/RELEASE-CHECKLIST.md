@@ -12,6 +12,7 @@
 - [ ] Confirm branch is clean
 - [ ] Confirm scope of changed files matches selected mode
 - [ ] Validate formula syntax when formula changed: `ruby -c Formula/pi-statusbar.rb`
+- [ ] Commit message format ready: one-line subject + detailed body
 
 ---
 
@@ -30,14 +31,14 @@
   - [ ] `revision` removed/reset (unless intentionally needed)
 
 ### Git/GitHub release
-- [ ] Commit release changes
+- [ ] Commit release changes (one-line subject + detailed body)
 - [ ] Create tag `vX.Y.Z`
 - [ ] Push branch + tags
 - [ ] Publish GitHub release notes
 
 ### Homebrew tap
 - [ ] Update `jademind/homebrew-tap/Formula/pi-statusbar.rb` with same `url/version/sha256` (+ revision state)
-- [ ] Commit + push tap update
+- [ ] Commit + push tap update (one-line subject + detailed body)
 
 ### Verification
 - [ ] `brew update`
@@ -57,11 +58,11 @@
 - [ ] Keep source `url` unchanged
 - [ ] Keep `version` unchanged
 - [ ] Increment `revision` in `Formula/pi-statusbar.rb`
-- [ ] Commit + push repo formula update
+- [ ] Commit + push repo formula update (one-line subject + detailed body)
 
 ### Homebrew tap
 - [ ] Mirror same `revision` bump in `jademind/homebrew-tap/Formula/pi-statusbar.rb`
-- [ ] Commit + push tap update
+- [ ] Commit + push tap update (one-line subject + detailed body)
 
 ### Verification
 - [ ] `brew update`
@@ -73,7 +74,7 @@
 
 ## 2C) Mode C — Tap-sync only
 - [ ] Copy canonical formula from this repo to tap formula
-- [ ] Commit + push tap update
+- [ ] Commit + push tap update (one-line subject + detailed body)
 - [ ] `brew update`
 - [ ] `brew install` or `brew upgrade jademind/tap/pi-statusbar` works
 
