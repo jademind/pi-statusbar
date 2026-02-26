@@ -1,9 +1,9 @@
 class PiStatusbar < Formula
   desc "Pi macOS status bar app with local daemon and session controls"
   homepage "https://github.com/jademind/pi-statusbar"
-  url "https://github.com/jademind/pi-statusbar/archive/refs/tags/v0.1.10.tar.gz"
-  sha256 "d5d3bb8b883314369f431caa104c622db53c6035698c05f84291f860867d495c"
-  version "0.1.10"
+  url "https://github.com/jademind/pi-statusbar/archive/refs/tags/v0.1.11.tar.gz"
+  sha256 "bade980638bc93e13b0bc7e654e575b7392564d53cfb06c892a7537c64e3ce0e"
+  version "0.1.11"
   license "MIT"
   head "https://github.com/jademind/pi-statusbar.git", branch: "main"
 
