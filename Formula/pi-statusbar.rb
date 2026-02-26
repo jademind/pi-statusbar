@@ -17,7 +17,7 @@ class PiStatusbar < Formula
     ENV["SWIFTPM_DISABLE_SANDBOX"] = "1"
 
     cd libexec do
-      system "swift", "build", "-c", "release", "--product", "PiStatusBar"
+      system "swift", "build", "--disable-sandbox", "-c", "release", "--product", "PiStatusBar"
       bin.install ".build/release/PiStatusBar"
     end
 
