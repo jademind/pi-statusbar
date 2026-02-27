@@ -480,10 +480,12 @@ daemon_ensure() {
 # -------- app service control --------
 resolve_app_binary() {
   local app_bin
-  app_bin="$(command -v PiStatusBar || true)"
-  if [[ -n "$app_bin" ]]; then echo "$app_bin"; return 0; fi
+  # Prefer local repo builds when running from source checkout.
+  # This avoids accidentally launching an older Homebrew binary.
   if [[ -x "$ROOT_DIR/.build/release/PiStatusBar" ]]; then echo "$ROOT_DIR/.build/release/PiStatusBar"; return 0; fi
   if [[ -x "$ROOT_DIR/.build/debug/PiStatusBar" ]]; then echo "$ROOT_DIR/.build/debug/PiStatusBar"; return 0; fi
+  app_bin="$(command -v PiStatusBar || true)"
+  if [[ -n "$app_bin" ]]; then echo "$app_bin"; return 0; fi
   echo ""
 }
 
@@ -577,6 +579,7 @@ daemon_service_install() {
     <key>PYTHONUNBUFFERED</key><string>1</string>
     <key>PI_STATUSBAR_ROOT</key><string>$ROOT_DIR</string>
     <key>PI_STATUSBAR_PYTHON</key><string>python3</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 </dict></plist>
 EOF

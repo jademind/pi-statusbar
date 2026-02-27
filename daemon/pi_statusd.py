@@ -8,6 +8,7 @@ import re
 import socket
 import html as html_lib
 import subprocess
+import shutil
 import time
 import tempfile
 import pwd
@@ -66,6 +67,23 @@ class Scanner:
     def __init__(self) -> None:
         self._runtime_preview_cache: Dict[int, Dict] = {}
         self._session_message_cache: Dict[str, Dict] = {}
+        self._bin_cache: Dict[str, str] = {}
+
+    def _bin(self, name: str) -> str:
+        cached = self._bin_cache.get(name)
+        if cached:
+            return cached
+
+        found = shutil.which(name)
+        if not found:
+            for candidate in (f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}"):
+                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                    found = candidate
+                    break
+
+        resolved = found or name
+        self._bin_cache[name] = resolved
+        return resolved
 
     def scan(self) -> Dict:
         rows = self._ps_rows()
@@ -317,7 +335,13 @@ class Scanner:
         configured = os.environ.get("PI_BRIDGE_DIR", "").strip()
         if configured:
             return Path(configured)
-        return Path.home() / ".pi-statubar" / "statusbridge"
+
+        canonical = Path.home() / ".pi" / "agent" / "statusbridge"
+        if canonical.exists():
+            return canonical
+
+        legacy = Path.home() / ".pi-statubar" / "statusbridge"
+        return legacy
 
     def _bridge_registry_for_pid(self, pid: int) -> Dict | None:
         registry_file = self._bridge_base_dir() / "registry" / f"{pid}.json"
@@ -478,7 +502,7 @@ class Scanner:
         tty_path = tty if tty.startswith("/dev/") else f"/dev/{tty}"
         try:
             proc = subprocess.run(
-                ["tmux", "list-panes", "-a", "-F", "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"],
+                [self._bin("tmux"), "list-panes", "-a", "-F", "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"],
                 capture_output=True,
                 text=True,
                 timeout=1.2,
@@ -501,19 +525,20 @@ class Scanner:
 
     def _send_tmux_message(self, text: str, mux_session: str | None, tmux_target: str | None) -> bool:
         attempts: List[List[str]] = []
+        tmux_bin = self._bin("tmux")
 
         # Best target: telemetry/tty-resolved pane target (session:window.pane).
         if tmux_target:
-            attempts.append(["tmux", "send-keys", "-t", tmux_target, text, "C-m"])
+            attempts.append([tmux_bin, "send-keys", "-t", tmux_target, text, "C-m"])
 
         # Session-targeted send (works for regular tmux session names).
         if mux_session:
-            attempts.append(["tmux", "send-keys", "-t", mux_session, text, "C-m"])
+            attempts.append([tmux_bin, "send-keys", "-t", mux_session, text, "C-m"])
             # Compatibility fallback when mux_session is actually a socket label.
-            attempts.append(["tmux", "-L", mux_session, "send-keys", text, "C-m"])
+            attempts.append([tmux_bin, "-L", mux_session, "send-keys", text, "C-m"])
 
         # Final fallback: current client session.
-        attempts.append(["tmux", "send-keys", text, "C-m"])
+        attempts.append([tmux_bin, "send-keys", text, "C-m"])
 
         for cmd in attempts:
             try:
@@ -755,15 +780,16 @@ return "no"
         # Prefer deterministic mux injection.
         if mux == "zellij" and mux_session:
             try:
+                zellij_bin = self._bin("zellij")
                 proc = subprocess.run(
-                    ["zellij", "--session", mux_session, "action", "write-chars", text],
+                    [zellij_bin, "--session", mux_session, "action", "write-chars", text],
                     capture_output=True,
                     text=True,
                     timeout=1.2,
                 )
                 if proc.returncode == 0:
                     subprocess.run(
-                        ["zellij", "--session", mux_session, "action", "write", "13"],
+                        [zellij_bin, "--session", mux_session, "action", "write", "13"],
                         capture_output=True,
                         text=True,
                         timeout=1.2,
@@ -991,7 +1017,7 @@ return "no"
 
         try:
             proc = subprocess.run(
-                ["zellij", "--session", mux_session, "action", "dump-screen", "--full", tmp_path],
+                [self._bin("zellij"), "--session", mux_session, "action", "dump-screen", "--full", tmp_path],
                 capture_output=True,
                 text=True,
                 timeout=2.0,
@@ -1012,7 +1038,7 @@ return "no"
     def _tmux_tail_preview(self, mux_session: str) -> str | None:
         try:
             proc = subprocess.run(
-                ["tmux", "-L", mux_session, "capture-pane", "-p", "-S", "-2000"],
+                [self._bin("tmux"), "-L", mux_session, "capture-pane", "-p", "-S", "-2000"],
                 capture_output=True,
                 text=True,
                 timeout=2.0,
