@@ -11,7 +11,7 @@ This repository contains:
 
 ## Version
 
-Latest tagged release: **0.1.15**
+Latest tagged release: **0.1.16**
 
 ---
 
