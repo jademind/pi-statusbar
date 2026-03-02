@@ -25,6 +25,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        stopHTTPBridge()
+    }
+
+    private func stopHTTPBridge() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", "daemon/pi-statusbar http-stop >/dev/null 2>&1 || true"]
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // Best-effort cleanup; ignore failures on quit.
+        }
+    }
 }
 
 struct ContentView: View {
