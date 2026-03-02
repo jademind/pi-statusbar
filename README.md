@@ -82,6 +82,46 @@ Then restart active Pi sessions and verify in each session:
 /pi-bridge-status
 ```
 
+### Linux VM setup for Pi Pulse / iOS clients
+
+If you're running from a Linux VM (no macOS menu bar app), use the setup helper to bring up `pi-statusd` + HTTP bridge and generate App Connect artifacts in one command.
+
+Prereqs:
+
+- `uv`
+- `openssl`
+- `curl`
+
+Run:
+
+```bash
+uv sync
+./daemon/setup-vm.sh --out-dir ~/pi-statusbar-ios
+```
+
+Generated files:
+
+- `~/pi-statusbar-ios/app_connect_payload.json`
+- `~/pi-statusbar-ios/app_connect.env`
+- `~/pi-statusbar-ios/app_connect_qr.png` (when `qrcode` is installed via `uv sync`)
+
+Useful options:
+
+```bash
+./daemon/setup-vm.sh --host <reachable-ip-or-dns>
+./daemon/setup-vm.sh --http-port 8787 --https-port 8788
+./daemon/setup-vm.sh --token <fixed-token>
+./daemon/setup-vm.sh --no-qr
+```
+
+Stop/disable for Linux VM flow:
+
+```bash
+./daemon/teardown-vm.sh --out-dir ~/pi-statusbar-ios
+# optional full cleanup of runtime/log/http config+certs:
+./daemon/teardown-vm.sh --out-dir ~/pi-statusbar-ios --purge-all
+```
+
 ### Managed startup (recommended)
 
 Use the LaunchAgent management script for clean startup/login behavior:
