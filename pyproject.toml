@@ -1,0 +1,15 @@
+[project]
+name = "pi-statusbar"
+version = "0.1.0"
+description = "Python tooling for pi-statusbar daemon setup and App Connect QR generation"
+requires-python = ">=3.10"
+dependencies = [
+    "qrcode[pil]>=8.2",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = false
