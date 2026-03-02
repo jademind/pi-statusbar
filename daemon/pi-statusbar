@@ -109,10 +109,10 @@ except Exception:
 
 http_default = int("$HTTP_DEFAULT_PORT")
 https_default = int("$HTTPS_DEFAULT_PORT")
-cfg.setdefault("host", "0.0.0.0")
+cfg.setdefault("host", "auto")
 cfg.setdefault("port", http_default)
 cfg.setdefault("https_enabled", True)
-cfg.setdefault("https_host", cfg.get("host", "0.0.0.0"))
+cfg.setdefault("https_host", cfg.get("host", "auto"))
 cfg.setdefault("https_port", https_default)
 cfg.setdefault("allow_loopback_unauth", True)
 
@@ -291,7 +291,7 @@ cfg = {}
 if p.exists():
     try: cfg = json.loads(p.read_text())
     except Exception: cfg = {}
-host = cfg.get("host", "0.0.0.0")
+host = cfg.get("host", "auto")
 port = cfg.get("port", int("$HTTP_DEFAULT_PORT"))
 token = cfg.get("token", "")
 https_enabled = bool(cfg.get("https_enabled", True))
@@ -324,11 +324,11 @@ tok = "$token".strip()
 if not tok:
     tok = str(cfg.get("token") or "").strip() or secrets.token_urlsafe(24)
 cfg["token"] = tok
-cfg.setdefault("host", "0.0.0.0")
+cfg.setdefault("host", "auto")
 cfg.setdefault("port", int("$HTTP_DEFAULT_PORT"))
 cfg.setdefault("allow_loopback_unauth", True)
 cfg.setdefault("https_enabled", True)
-cfg.setdefault("https_host", cfg.get("host", "0.0.0.0"))
+cfg.setdefault("https_host", cfg.get("host", "auto"))
 cfg.setdefault("https_port", int("$HTTPS_DEFAULT_PORT"))
 cfg.setdefault("https_cert_path", str(pathlib.Path.home() / ".pi-statubar" / "statusd-http-cert.pem"))
 cfg.setdefault("https_key_path", str(pathlib.Path.home() / ".pi-statubar" / "statusd-http-key.pem"))

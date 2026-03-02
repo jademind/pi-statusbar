@@ -33,6 +33,15 @@ def _expand_path(value: str | None, fallback: Path) -> Path:
     return Path(raw).expanduser()
 
 
+def _normalize_bind_host(raw: str | None, default: str = "auto") -> str:
+    value = (raw or "").strip()
+    if not value:
+        return default
+    if value.lower() == "auto":
+        return "auto"
+    return value
+
+
 def load_config() -> dict[str, Any]:
     cfg: dict[str, Any] = {}
     try:
@@ -43,7 +52,7 @@ def load_config() -> dict[str, Any]:
     except Exception:
         cfg = {}
 
-    host = os.environ.get("PI_STATUSD_HTTP_HOST", str(cfg.get("host") or "0.0.0.0"))
+    host = _normalize_bind_host(os.environ.get("PI_STATUSD_HTTP_HOST", str(cfg.get("host") or "auto")), default="auto")
     port = int(os.environ.get("PI_STATUSD_HTTP_PORT", str(cfg.get("port") or DEFAULT_HTTP_PORT)))
     token = os.environ.get("PI_STATUSD_HTTP_TOKEN", str(cfg.get("token") or "")).strip() or None
 
@@ -57,7 +66,7 @@ def load_config() -> dict[str, Any]:
     send_rate_per_10s = int(cfg.get("send_rate_per_10s", 12))
 
     https_enabled = bool(cfg.get("https_enabled", True))
-    https_host = str(cfg.get("https_host") or host)
+    https_host = _normalize_bind_host(str(cfg.get("https_host") or host), default=host)
     https_port = int(cfg.get("https_port") or DEFAULT_HTTPS_PORT)
     https_cert_path = _expand_path(str(cfg.get("https_cert_path") or ""), DEFAULT_CERT_PATH)
     https_key_path = _expand_path(str(cfg.get("https_key_path") or ""), DEFAULT_KEY_PATH)
@@ -120,7 +129,7 @@ def ensure_self_signed_cert(cert_path: Path, key_path: Path) -> None:
         "-subj",
         "/CN=pi-statusd-http",
         "-addext",
-        "subjectAltName=DNS:localhost,IP:127.0.0.1",
+        "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1",
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -220,6 +229,28 @@ class RateLimiter:
 
 
 class SafeThreadingHTTPServer(ThreadingHTTPServer):
+    def __init__(
+        self,
+        server_address: tuple[Any, ...],
+        RequestHandlerClass: type[BaseHTTPRequestHandler],
+        *,
+        address_family: int | None = None,
+        dualstack_ipv6: bool = False,
+    ) -> None:
+        self._dualstack_ipv6 = dualstack_ipv6
+        if address_family is not None:
+            self.address_family = address_family
+        super().__init__(server_address, RequestHandlerClass)
+
+    def server_bind(self) -> None:
+        if self.address_family == socket.AF_INET6 and self._dualstack_ipv6:
+            try:
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except OSError:
+                # Platform/kernel may force v6-only sockets. Binding still works for IPv6.
+                pass
+        super().server_bind()
+
     def handle_error(self, request: Any, client_address: tuple[str, int]) -> None:
         _typ, err, _tb = sys.exc_info()
         if isinstance(err, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError)):
@@ -602,6 +633,103 @@ def apply_shared_server_state(server: ThreadingHTTPServer, cfg: dict[str, Any], 
     server.cert_sha256 = cert_sha256
 
 
+def _server_candidates(host: str, port: int) -> list[tuple[int, str, bool]]:
+    raw = (host or "").strip()
+    candidates: list[tuple[int, str, bool]] = []
+
+    if raw.lower() == "auto":
+        raw = "0.0.0.0"
+
+    if raw in ("", "0.0.0.0"):
+        # Auto mode: prefer dual-stack IPv6 socket (serves v6 + v4 on supporting platforms),
+        # then fall back to IPv4-only.
+        return [
+            (socket.AF_INET6, "::", True),
+            (socket.AF_INET, "0.0.0.0", False),
+        ]
+
+    if raw == "::":
+        return [
+            (socket.AF_INET6, "::", True),
+            (socket.AF_INET6, "::", False),
+        ]
+
+    try:
+        addr = ipaddress.ip_address(raw)
+        if addr.version == 6:
+            return [(socket.AF_INET6, raw, False)]
+        return [(socket.AF_INET, raw, False)]
+    except ValueError:
+        pass
+
+    # Hostname: resolve and try available families (prefer IPv6 first).
+    try:
+        infos = socket.getaddrinfo(raw, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except OSError:
+        infos = []
+
+    seen: set[tuple[int, str]] = set()
+    v6: list[tuple[int, str, bool]] = []
+    v4: list[tuple[int, str, bool]] = []
+    for family, _socktype, _proto, _canonname, sockaddr in infos:
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        bind_host = str(sockaddr[0])
+        key = (family, bind_host)
+        if key in seen:
+            continue
+        seen.add(key)
+        if family == socket.AF_INET6:
+            v6.append((family, bind_host, False))
+        else:
+            v4.append((family, bind_host, False))
+
+    candidates.extend(v6)
+    candidates.extend(v4)
+
+    if not candidates:
+        # Conservative fallback when DNS resolution is unavailable.
+        candidates = [
+            (socket.AF_INET6, raw, False),
+            (socket.AF_INET, raw, False),
+        ]
+
+    return candidates
+
+
+def create_http_server(host: str, port: int, handler: type[BaseHTTPRequestHandler]) -> SafeThreadingHTTPServer:
+    errors: list[str] = []
+    for family, bind_host, dualstack in _server_candidates(host, port):
+        try:
+            return SafeThreadingHTTPServer(
+                (bind_host, port),
+                handler,
+                address_family=family,
+                dualstack_ipv6=dualstack,
+            )
+        except OSError as e:
+            mode = "dual-stack" if (family == socket.AF_INET6 and dualstack) else ("ipv6" if family == socket.AF_INET6 else "ipv4")
+            errors.append(f"{mode} {bind_host}:{port} -> {e}")
+
+    raise OSError(f"unable to bind {host}:{port}; attempts: {' | '.join(errors) or 'none'}")
+
+
+def describe_listen(server: SafeThreadingHTTPServer) -> str:
+    addr = server.server_address
+    host = str(addr[0])
+    port = int(addr[1])
+    if ":" in host:
+        endpoint = f"[{host}]:{port}"
+    else:
+        endpoint = f"{host}:{port}"
+
+    if server.address_family == socket.AF_INET6 and getattr(server, "_dualstack_ipv6", False):
+        return f"{endpoint} (dual-stack)"
+    if server.address_family == socket.AF_INET6:
+        return f"{endpoint} (ipv6)"
+    return f"{endpoint} (ipv4)"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default=None)
@@ -614,12 +742,12 @@ def main() -> None:
 
     cert_sha256: str | None = None
 
-    # HTTP endpoint (existing behavior)
-    httpd = SafeThreadingHTTPServer((host, port), Handler)
+    # HTTP endpoint
+    httpd = create_http_server(host, port, Handler)
     apply_shared_server_state(httpd, cfg, cert_sha256)
 
     print(
-        f"[statusd-http] http listening on {host}:{port} token={'set' if httpd.token else 'unset'} cidrs={httpd.allow_cidrs or 'any'}",
+        f"[statusd-http] http listening on {describe_listen(httpd)} token={'set' if httpd.token else 'unset'} cidrs={httpd.allow_cidrs or 'any'}",
         flush=True,
     )
 
@@ -634,7 +762,7 @@ def main() -> None:
 
             https_host = str(cfg.get("https_host") or host)
             https_port = int(cfg.get("https_port") or DEFAULT_HTTPS_PORT)
-            httpsd = SafeThreadingHTTPServer((https_host, https_port), Handler)
+            httpsd = create_http_server(https_host, https_port, Handler)
             apply_shared_server_state(httpsd, cfg, cert_sha256)
 
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -646,7 +774,7 @@ def main() -> None:
             t.start()
 
             print(
-                f"[statusd-http] https listening on {https_host}:{https_port} cert_sha256={cert_sha256 or 'unknown'}",
+                f"[statusd-http] https listening on {describe_listen(httpsd)} cert_sha256={cert_sha256 or 'unknown'}",
                 flush=True,
             )
         except Exception as e:
